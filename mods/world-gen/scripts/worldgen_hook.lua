@@ -14,6 +14,7 @@ if not WorldGenMod_PigkingMover then
 end
 
 local MovePigkingToCoast = WorldGenMod_PigkingMover.MovePigkingToCoast
+local MoveBeequeenToCoast = WorldGenMod_PigkingMover.MoveBeequeenToCoast
 
 -- Hook retrofit_savedata.DoRetrofitting来修改savedata.ents
 -- 这是标准方式：DoRetrofitting在AddWorldEntities之前调用，且接收world_map作为参数
@@ -41,7 +42,7 @@ local function HookDoRetrofitting()
             -- 先调用原始函数
             original_DoRetrofitting(savedata, world_map)
             
-            print("World Gen Mod: DoRetrofitting called, moving pigking to coast...")
+            print("World Gen Mod: DoRetrofitting called, moving layouts to coast...")
             
             -- 只在PopulateWorld阶段执行（world_map参数存在时）
             -- 在世界生成阶段（worldgen_main.lua），DoRetrofitting不会被调用
@@ -63,12 +64,13 @@ local function HookDoRetrofitting()
             
             -- 执行移动逻辑（在AddWorldEntities调用之前）
             MovePigkingToCoast(savedata, world_map)
+            MoveBeequeenToCoast(savedata, world_map)
             
             -- 重要：确保savedata.map.tiles被更新（原始函数可能设置了dirty但我们的修改在之后）
             -- 重新从world_map获取最新的tile数据并更新savedata
             savedata.map.tiles = world_map:GetStringEncode()
             savedata.map.nodeidtilemap = world_map:GetNodeIdTileMapStringEncode()
-            print("World Gen Mod: Updated savedata.map.tiles and savedata.map.nodeidtilemap after moving pigking")
+            print("World Gen Mod: Updated savedata.map.tiles and savedata.map.nodeidtilemap after moving layouts")
         end
         
         retrofit_module._pigking_coast_hooked = true

@@ -1,5 +1,5 @@
--- 猪王移动模块
--- 负责移动猪王布景到海边位置
+-- 布局移动模块
+-- 负责移动布局到海边位置（支持多种布局类型）
 
 -- 确保依赖模块已加载
 if not WorldGenMod_Constants then
@@ -14,7 +14,6 @@ end
 
 local MAX_SEARCH_RADIUS = WorldGenMod_Constants.MAX_SEARCH_RADIUS
 local TILE_SCALE = WorldGenMod_Constants.TILE_SCALE
-local CollectAllPigkingLayouts = WorldGenMod_LayoutCollection.CollectAllPigkingLayouts
 local FindNearestCoastPosition = WorldGenMod_CoastDetection.FindNearestCoastPosition
 
 -- 函数：移动布局的地板tile（使用布局定义）
@@ -136,27 +135,53 @@ local function MoveGroundTiles(map, ground_tiles, old_x, old_z, new_x, new_z, sa
     savedata.map.nodeidtilemap = map:GetNodeIdTileMapStringEncode()
 end
 
--- 函数：移动猪王到海边
-local function MovePigkingToCoast(savedata, map)
+-- 函数：通用布局移动函数
+-- 参数：layout_type - 布局类型（如"pigking"、"beequeen"）
+--        collect_function - 收集函数（如CollectAllPigkingLayouts）
+local function MoveLayoutToCoast(layout_type, collect_function, savedata, map)
     -- 检查savedata结构
     if not savedata or not savedata.ents or not savedata.map or not savedata.map.topology then
         print("World Gen Mod: Invalid savedata structure")
         return
     end
     
-    -- 第一步：收集所有猪王布局（包括实体和地板tile）
-    print("World Gen Mod: Collecting all pigking layouts...")
-    local all_layouts = CollectAllPigkingLayouts(savedata.ents, map, savedata)
+    -- 获取布局配置，检查是否需要移动地皮
+    local config = WorldGenMod_Constants.LAYOUT_CONFIGS[layout_type]
+    local move_ground = config and config.move_ground ~= false  -- 默认为true，除非明确设置为false
+    
+    -- 第一步：收集所有布局（包括实体和地板tile）
+    print("World Gen Mod: Collecting all " .. layout_type .. " layouts...")
+    local all_layouts = collect_function(savedata.ents, map, savedata)
     
     if #all_layouts == 0 then
-        print("World Gen Mod: No pigking layouts found")
+        print("World Gen Mod: No " .. layout_type .. " layouts found")
         return
     end
     
-    print("World Gen Mod: Found " .. #all_layouts .. " pigking layout(s)")
+    print("World Gen Mod: Found " .. #all_layouts .. " " .. layout_type .. " layout(s)")
     
     -- 第二步：移动每个布局
     local moved_layouts = 0
+    local map_width = savedata.map.width
+    local map_height = savedata.map.height
+    
+    -- tile中心计算函数（复用）
+    local function GetTileCenter(x, z)
+        -- 将世界坐标转换为tile坐标（使用与WorldToTileCoords相同的逻辑）
+        local tile_x = x / TILE_SCALE + map_width / 2.0
+        local tile_z = z / TILE_SCALE + map_height / 2.0
+        
+        -- 取整得到tile索引（使用math.floor，不是math.floor + 0.5）
+        local tile_idx_x = math.floor(tile_x)
+        local tile_idx_z = math.floor(tile_z)
+        
+        -- 将tile索引转换回世界坐标（tile中心 = tile索引 + 0.5，然后转换回世界坐标）
+        -- tile中心 = (tile_idx + 0.5 - map_width/2) * TILE_SCALE
+        local tile_center_x = (tile_idx_x + 0.5 - map_width / 2.0) * TILE_SCALE
+        local tile_center_z = (tile_idx_z + 0.5 - map_height / 2.0) * TILE_SCALE
+        
+        return tile_center_x, tile_center_z
+    end
     
     for _, layout_info in ipairs(all_layouts) do
         local layout_entities = layout_info.entities
@@ -164,7 +189,7 @@ local function MovePigkingToCoast(savedata, map)
         local original_x = layout_info.center_x
         local original_z = layout_info.center_z
         
-        print("World Gen Mod: Processing layout '" .. layout_info.layout_name .. "' at (" .. original_x .. ", " .. original_z .. ") with " .. #layout_entities .. " entities")
+        print("World Gen Mod: Processing " .. layout_type .. " layout '" .. layout_info.layout_name .. "' at (" .. original_x .. ", " .. original_z .. ") with " .. #layout_entities .. " entities")
         
         -- 查找最近的海边位置（仅使用Map API检查tile类型）
         print("World Gen Mod: Searching for nearest coast position from (" .. original_x .. ", " .. original_z .. ")...")
@@ -177,33 +202,14 @@ local function MovePigkingToCoast(savedata, map)
         else
             print("World Gen Mod: ERROR - world_map not available, cannot detect coast accurately")
         end
-        -- 计算猪王相对于所在tile的位置偏移（tile内的偏移量）
+        
+        -- 计算中心实体相对于所在tile的位置偏移（tile内的偏移量）
         -- 确保移动后保持相同的tile内相对位置
-        local map_width = savedata.map.width
-        local map_height = savedata.map.height
-        
-        local function GetTileCenter(x, z)
-            -- 将世界坐标转换为tile坐标（使用与WorldToTileCoords相同的逻辑）
-            local tile_x = x / TILE_SCALE + map_width / 2.0
-            local tile_z = z / TILE_SCALE + map_height / 2.0
-            
-            -- 取整得到tile索引（使用math.floor，不是math.floor + 0.5）
-            local tile_idx_x = math.floor(tile_x)
-            local tile_idx_z = math.floor(tile_z)
-            
-            -- 将tile索引转换回世界坐标（tile中心 = tile索引 + 0.5，然后转换回世界坐标）
-            -- tile中心 = (tile_idx + 0.5 - map_width/2) * TILE_SCALE
-            local tile_center_x = (tile_idx_x + 0.5 - map_width / 2.0) * TILE_SCALE
-            local tile_center_z = (tile_idx_z + 0.5 - map_height / 2.0) * TILE_SCALE
-            
-            return tile_center_x, tile_center_z
-        end
-        
         local original_tile_center_x, original_tile_center_z = GetTileCenter(original_x, original_z)
         local tile_offset_x = original_x - original_tile_center_x
         local tile_offset_z = original_z - original_tile_center_z
         
-        print("World Gen Mod: Pigking at (" .. original_x .. ", " .. original_z .. "), tile center at (" .. original_tile_center_x .. ", " .. original_tile_center_z .. "), tile offset (" .. tile_offset_x .. ", " .. tile_offset_z .. ")")
+        print("World Gen Mod: " .. layout_type .. " at (" .. original_x .. ", " .. original_z .. "), tile center at (" .. original_tile_center_x .. ", " .. original_tile_center_z .. "), tile offset (" .. tile_offset_x .. ", " .. tile_offset_z .. ")")
         
         -- 查找最近的海边位置（返回tile中心位置）
         local new_tile_center_x, new_tile_center_z = FindNearestCoastPosition(original_tile_center_x, original_tile_center_z, MAX_SEARCH_RADIUS, map, savedata)
@@ -212,7 +218,7 @@ local function MovePigkingToCoast(savedata, map)
         local new_x = new_tile_center_x + tile_offset_x
         local new_z = new_tile_center_z + tile_offset_z
         
-        print("World Gen Mod: New tile center at (" .. new_tile_center_x .. ", " .. new_tile_center_z .. "), new pigking position (" .. new_x .. ", " .. new_z .. ")")
+        print("World Gen Mod: New tile center at (" .. new_tile_center_x .. ", " .. new_tile_center_z .. "), new " .. layout_type .. " position (" .. new_x .. ", " .. new_z .. ")")
         
         -- 计算位置偏移
         local offset_x = new_x - original_x
@@ -220,7 +226,7 @@ local function MovePigkingToCoast(savedata, map)
         
         -- 只有在位置真的改变时才移动
         if offset_x ~= 0 or offset_z ~= 0 then
-            print("World Gen Mod: Moving layout from (" .. original_x .. ", " .. original_z .. ") to coast at (" .. new_x .. ", " .. new_z .. ")")
+            print("World Gen Mod: Moving " .. layout_type .. " layout from (" .. original_x .. ", " .. original_z .. ") to coast at (" .. new_x .. ", " .. new_z .. ")")
             
             -- 移动所有实体到新位置，保持相对位置
             for _, entity_info in ipairs(layout_entities) do
@@ -245,41 +251,48 @@ local function MovePigkingToCoast(savedata, map)
                 end
             end
             
-            -- 移动地板tile
-            if layout_info.ground_tiles and map then
-                -- 使用收集的ground_tiles数据
-                MoveGroundTiles(map, layout_info.ground_tiles, original_x, original_z, new_x, new_z, savedata)
-            elseif layout_def and layout_def.ground and layout_def.ground_types and map then
-                -- 使用布局定义中的ground数据
-                MoveLayoutGroundTilesFromDef(map, layout_def, original_x, original_z, new_x, new_z, savedata)
+            -- 移动地板tile（根据配置决定是否移动）
+            if move_ground then
+                if layout_info.ground_tiles and map then
+                    -- 使用收集的ground_tiles数据
+                    MoveGroundTiles(map, layout_info.ground_tiles, original_x, original_z, new_x, new_z, savedata)
+                elseif layout_def and layout_def.ground and layout_def.ground_types and map then
+                    -- 使用布局定义中的ground数据
+                    MoveLayoutGroundTilesFromDef(map, layout_def, original_x, original_z, new_x, new_z, savedata)
+                else
+                    print("World Gen Mod: No ground data available, skipping ground tile movement")
+                end
             else
-                print("World Gen Mod: No ground data available, skipping ground tile movement")
+                print("World Gen Mod: Skipping ground tile movement for " .. layout_type .. " (move_ground = false)")
             end
             
             moved_layouts = moved_layouts + 1
         else
-            print("World Gen Mod: Pigking is already at coast position, no move needed")
+            print("World Gen Mod: " .. layout_type .. " is already at coast position, no move needed")
         end
     end
     
     if moved_layouts > 0 then
-        print("World Gen Mod: Successfully moved " .. moved_layouts .. " pigking layout(s) to coast in savedata")
-        
-        -- 验证：检查savedata中的实体位置是否已更新
-        if savedata.ents.pigking and type(savedata.ents.pigking) == "table" then
-            for i, pk_data in ipairs(savedata.ents.pigking) do
-                if pk_data and pk_data.x and pk_data.z then
-                    print("World Gen Mod: Verification - pigking[" .. i .. "] position in savedata: (" .. pk_data.x .. ", " .. pk_data.z .. ")")
-                end
-            end
-        end
+        print("World Gen Mod: Successfully moved " .. moved_layouts .. " " .. layout_type .. " layout(s) to coast in savedata")
     else
-        print("World Gen Mod: No pigking layouts needed to be moved (all are already at coast)")
+        print("World Gen Mod: No " .. layout_type .. " layouts needed to be moved (all are already at coast)")
     end
+end
+
+-- 函数：移动猪王到海边
+local function MovePigkingToCoast(savedata, map)
+    MoveLayoutToCoast("pigking", WorldGenMod_LayoutCollection.CollectAllPigkingLayouts, savedata, map)
+end
+
+-- 函数：移动蜂后到海边
+local function MoveBeequeenToCoast(savedata, map)
+    MoveLayoutToCoast("beequeen", WorldGenMod_LayoutCollection.CollectAllBeequeenLayouts, savedata, map)
 end
 
 -- 导出到全局变量（因为modimport不支持返回值）
 WorldGenMod_PigkingMover = {
     MovePigkingToCoast = MovePigkingToCoast,
+    MoveBeequeenToCoast = MoveBeequeenToCoast,
+    MoveLayoutToCoast = MoveLayoutToCoast,  -- 通用函数
 }
 

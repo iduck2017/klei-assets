@@ -1,5 +1,5 @@
 -- 布景收集模块
--- 用于从savedata中收集猪王布景的所有实体
+-- 用于从savedata中收集布局的所有实体
 -- 基于位置范围收集实体，不依赖布局定义
 
 -- 确保常量已加载
@@ -8,9 +8,7 @@ if not WorldGenMod_Constants then
 end
 
 local TILE_SCALE = WorldGenMod_Constants.TILE_SCALE
-local PIGKING_LAYOUT_RADIUS_ENTITIES = WorldGenMod_Constants.PIGKING_LAYOUT_RADIUS_ENTITIES
-local PIGKING_LAYOUT_RADIUS_GROUND = WorldGenMod_Constants.PIGKING_LAYOUT_RADIUS_GROUND
-local PIGKING_LAYOUT_ENTITIES = WorldGenMod_Constants.PIGKING_LAYOUT_ENTITIES
+local LAYOUT_CONFIGS = WorldGenMod_Constants.LAYOUT_CONFIGS
 
 -- 函数：计算两点之间的距离
 local function Distance(x1, z1, x2, z2)
@@ -114,45 +112,59 @@ local function CollectGroundTiles(map, center_x, center_z, radius, savedata)
     return ground_tiles
 end
 
--- 函数：收集所有猪王布局信息（基于位置范围）
--- 返回：包含所有猪王布局的列表，每个布局包含 entities 和 ground_tiles
-local function CollectAllPigkingLayouts(savedata_ents, map, savedata)
+-- 函数：通用布局收集函数（基于位置范围）
+-- 参数：layout_type - 布局类型（如"pigking"、"beequeen"）
+-- 返回：包含所有布局的列表，每个布局包含 entities 和 ground_tiles
+local function CollectAllLayouts(layout_type, savedata_ents, map, savedata)
     local all_layouts = {}
     
-    if not savedata_ents.pigking or type(savedata_ents.pigking) ~= "table" then
-        print("World Gen Mod: No pigking entities in savedata")
+    -- 获取布局配置
+    local config = LAYOUT_CONFIGS[layout_type]
+    if not config then
+        print("World Gen Mod: ERROR - Unknown layout type: " .. tostring(layout_type))
         return all_layouts
     end
     
-    print("World Gen Mod: Found " .. #savedata_ents.pigking .. " pigking entity(ies) in savedata")
+    local center_entity = config.center_entity
+    local related_entities = config.related_entities
+    local radius_entities = config.radius_entities
+    local radius_ground = config.radius_ground
     
-    -- 为每个猪王实体收集周围范围内的所有相关实体和地板
-    for _, pigking_data in ipairs(savedata_ents.pigking) do
-        if pigking_data and pigking_data.x and pigking_data.z then
-            local pigking_x = pigking_data.x
-            local pigking_z = pigking_data.z
+    -- 检查中心实体是否存在
+    if not savedata_ents[center_entity] or type(savedata_ents[center_entity]) ~= "table" then
+        print("World Gen Mod: No " .. center_entity .. " entities in savedata")
+        return all_layouts
+    end
+    
+    print("World Gen Mod: Found " .. #savedata_ents[center_entity] .. " " .. center_entity .. " entity(ies) in savedata")
+    
+    -- 为每个中心实体收集周围范围内的所有相关实体和地板
+    for _, center_data in ipairs(savedata_ents[center_entity]) do
+        if center_data and center_data.x and center_data.z then
+            local center_x = center_data.x
+            local center_z = center_data.z
             
-            print("World Gen Mod: Collecting entities around pigking at (" .. pigking_x .. ", " .. pigking_z .. ")")
+            print("World Gen Mod: Collecting entities around " .. center_entity .. " at (" .. center_x .. ", " .. center_z .. ")")
             
-            -- 在指定半径内收集所有相关实体（使用较大的半径，因为insanityrock、sanityrock等实体距离较远）
+            -- 在指定半径内收集所有相关实体
             local collected_entities = CollectEntitiesInRadius(
                 savedata_ents, 
-                pigking_x, 
-                pigking_z, 
-                PIGKING_LAYOUT_RADIUS_ENTITIES, 
-                PIGKING_LAYOUT_ENTITIES
+                center_x, 
+                center_z, 
+                radius_entities, 
+                related_entities
             )
             
-            -- 收集地板tile数据（使用较小的半径，只覆盖4×4地皮）
+            -- 收集地板tile数据
             local ground_tiles = nil
             if map and savedata then
-                ground_tiles = CollectGroundTiles(map, pigking_x, pigking_z, PIGKING_LAYOUT_RADIUS_GROUND, savedata)
+                ground_tiles = CollectGroundTiles(map, center_x, center_z, radius_ground, savedata)
                 if ground_tiles then
-                    print("World Gen Mod: Collected " .. #ground_tiles .. " ground tiles around pigking")
+                    print("World Gen Mod: Collected " .. #ground_tiles .. " ground tiles around " .. center_entity)
                 end
             end
             
-            -- 至少要有猪王本身
+            -- 至少要有中心实体本身
             if #collected_entities > 0 then
                 -- 按prefab类型分组统计
                 local entity_counts = {}
@@ -165,24 +177,36 @@ local function CollectAllPigkingLayouts(savedata_ents, map, savedata)
                     table.insert(entity_summary, prefab .. ":" .. count)
                 end
                 
-                print("World Gen Mod: Collected " .. #collected_entities .. " entities around pigking: " .. table.concat(entity_summary, ", "))
+                print("World Gen Mod: Collected " .. #collected_entities .. " entities around " .. center_entity .. ": " .. table.concat(entity_summary, ", "))
                 
                 table.insert(all_layouts, {
                     entities = collected_entities,
                     ground_tiles = ground_tiles,  -- 地板tile数据
                     layout_def = nil,  -- 不再使用布局定义
-                    layout_name = "radius_based",  -- 标记为基于范围的收集
-                    center_x = pigking_x,
-                    center_z = pigking_z
+                    layout_name = layout_type,  -- 布局类型名称
+                    center_x = center_x,
+                    center_z = center_z
                 })
             else
-                print("World Gen Mod: Warning - No entities found around pigking at (" .. pigking_x .. ", " .. pigking_z .. ")")
+                print("World Gen Mod: Warning - No entities found around " .. center_entity .. " at (" .. center_x .. ", " .. center_z .. ")")
             end
         end
     end
     
-    print("World Gen Mod: Total " .. #all_layouts .. " pigking layouts collected.")
+    print("World Gen Mod: Total " .. #all_layouts .. " " .. layout_type .. " layouts collected.")
     return all_layouts
+end
+
+-- 函数：收集所有猪王布局信息（基于位置范围）
+-- 返回：包含所有猪王布局的列表，每个布局包含 entities 和 ground_tiles
+local function CollectAllPigkingLayouts(savedata_ents, map, savedata)
+    return CollectAllLayouts("pigking", savedata_ents, map, savedata)
+end
+
+-- 函数：收集所有蜂后布局信息（基于位置范围）
+-- 返回：包含所有蜂后布局的列表，每个布局包含 entities 和 ground_tiles
+local function CollectAllBeequeenLayouts(savedata_ents, map, savedata)
+    return CollectAllLayouts("beequeen", savedata_ents, map, savedata)
 end
 
 -- 函数：在savedata中收集猪王布景的所有实体（使用布局定义）
@@ -286,5 +310,7 @@ end
 WorldGenMod_LayoutCollection = {
     CollectPigkingLayoutFromSavedata = CollectPigkingLayoutFromSavedata,
     CollectAllPigkingLayouts = CollectAllPigkingLayouts,
+    CollectAllBeequeenLayouts = CollectAllBeequeenLayouts,
+    CollectAllLayouts = CollectAllLayouts,  -- 通用函数
 }
 
