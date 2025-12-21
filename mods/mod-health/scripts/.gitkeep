@@ -1,0 +1,3 @@
+# This folder is for additional utility scripts
+# You can use modimport("scripts/myscript") in modmain.lua to load these
+

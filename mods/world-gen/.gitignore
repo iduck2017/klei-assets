@@ -1,0 +1,16 @@
+# Compiled assets
+*.tex
+*.xml
+*.ktex
+*.kxm
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
