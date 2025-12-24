@@ -40,31 +40,31 @@ function PigkingHandler.ProcessPosition(rcx_or_position, rcy_or_nil, layout_name
         end
     end
     
-    -- 修改坐标：查找最近的陆地边缘 tile
+    -- 修改坐标：查找最近的合法坐标（距离边缘 >= 8 tiles）
     local old_rcx, old_rcy = rcx, rcy
     local new_rcx, new_rcy
-    local found_edge = false
+    local found_valid = false
     
     print(string.format(
         "[Move Entity V2] ⚠️  检测到 DefaultPigking 布局: '%s'",
         layout_name
     ))
     
-    -- 如果提供了 world 对象，尝试查找陆地边缘
+    -- 如果提供了 world 对象，尝试查找合法坐标
     if world then
-        new_rcx, new_rcy, found_edge = LandEdgeFinder.FindNearestLandEdgeTile(old_rcx, old_rcy, world, 20)
+        new_rcx, new_rcy, found_valid = LandEdgeFinder.FindNearestValidPosition(old_rcx, old_rcy, world)
         
-        if found_edge then
+        if found_valid then
             print(string.format(
-                "[Move Entity V2] 🔧 修改 pigking 布局坐标: 原坐标 (%.2f, %.2f) -> 新坐标 (%.2f, %.2f) [移动到陆地边缘]",
+                "[Move Entity V2] 🔧 修改 pigking 布局坐标: 原坐标 (%.2f, %.2f) -> 新坐标 (%.2f, %.2f) [移动到合法位置，距离边缘 >= 8 tiles]",
                 old_rcx, old_rcy, new_rcx, new_rcy
             ))
         else
-            -- 未找到陆地边缘，使用原始坐标
+            -- 未找到合法坐标，使用原始坐标
             new_rcx = old_rcx
             new_rcy = old_rcy
             print(string.format(
-                "[Move Entity V2] ⚠️  未找到陆地边缘，保持原始坐标: (%.2f, %.2f)",
+                "[Move Entity V2] ⚠️  未找到合法坐标，保持原始坐标: (%.2f, %.2f)",
                 old_rcx, old_rcy
             ))
         end
@@ -79,15 +79,15 @@ function PigkingHandler.ProcessPosition(rcx_or_position, rcy_or_nil, layout_name
     end
     
     -- 根据输入格式返回相应格式
-    -- 如果找到陆地边缘，返回修改后的坐标；否则返回原始坐标（should_modify = false）
+    -- 如果找到合法坐标，返回修改后的坐标；否则返回原始坐标（should_modify = false）
     if is_table_input then
-        if found_edge then
+        if found_valid then
             return new_rcx, new_rcy, {new_rcx, new_rcy}
         else
             return rcx, rcy, rcx_or_position
         end
     else
-        return new_rcx, new_rcy, found_edge
+        return new_rcx, new_rcy, found_valid
     end
 end
 

@@ -910,3 +910,143 @@ end
 - 所以最终游戏中只有一个 pigking
 - 这是 DST 的正常机制，不是 bug
 
+---
+
+## 问题：猪王被移动到海上
+
+**时间**: 2025-12-25
+
+**问题描述**:
+实现预计算合法坐标方案后，发现 pigking 被移动到了海上，说明合法坐标集合中可能包含了海洋 tile。
+
+**可能的原因**:
+
+1. **预计算时误判**:
+   - `PrecomputeValidPositions` 中只检查了 `TileGroupManager:IsLandTile(tile)`
+   - 但可能某些 tile 在预计算时是陆地，但在布局放置时已经变成了海洋
+   - 或者 `IsLandTile` 判断有误
+
+2. **DistanceToEdge 计算错误**:
+   - `DistanceToEdge` 可能返回了错误的值
+   - 如果某个海洋 tile 周围都是海洋，`DistanceToEdge` 可能返回 `math.huge`
+   - 而 `math.huge >= 8` 为 true，导致海洋 tile 被加入合法坐标集合
+
+3. **坐标转换问题**:
+   - `TileToWorldCoords` 可能返回了错误的坐标
+   - 导致存储的坐标和实际 tile 位置不匹配
+
+4. **世界生成阶段问题**:
+   - 预计算时，某些区域可能还没有完全生成
+   - 或者预计算后，某些 tile 被修改了（如 `Ocean_ConvertImpassibleToWater`）
+
+**需要验证**:
+
+1. 检查预计算时是否正确过滤了海洋 tile
+2. 检查 `DistanceToEdge` 对海洋 tile 的返回值
+3. 检查坐标转换是否正确
+4. 添加调试日志，记录预计算时每个合法坐标的 tile 类型
+
+**可能的修复方案**:
+
+1. **在预计算时更严格地检查**:
+   ```lua
+   -- 不仅检查 IsLandTile，还要确保不是海洋
+   if tile and TileGroupManager:IsLandTile(tile) and not TileGroupManager:IsOceanTile(tile) then
+   ```
+
+2. **在查找最近坐标时再次验证**:
+   ```lua
+   -- 在返回坐标前，再次检查该位置是否是陆地
+   local tile = world:GetTile(best_pos.tx, best_pos.ty)
+   if not tile or not TileGroupManager:IsLandTile(tile) then
+       -- 跳过这个坐标，继续查找下一个
+   end
+   ```
+
+3. **在 DistanceToEdge 中提前返回**:
+   ```lua
+   -- 如果当前 tile 不是陆地，直接返回 0（距离边缘为 0）
+   if not TileGroupManager:IsLandTile(tile) then
+       return 0
+   end
+   ```
+
+**根本原因分析**:
+
+1. **DistanceToEdge 对海洋 tile 的处理**:
+   - 当前 `DistanceToEdge` 函数只检查 `IsLandEdgeTile`，如果找不到边缘，返回 `math.huge`
+   - 如果对海洋 tile 调用 `DistanceToEdge`，由于海洋 tile 不是陆地边缘，函数会搜索到 `max_radius` 后返回 `math.huge`
+   - 而 `math.huge >= 8` 为 `true`，导致海洋 tile 被错误地加入合法坐标集合
+
+2. **预计算时没有验证 tile 类型**:
+   - `PrecomputeValidPositions` 中虽然检查了 `IsLandTile`，但可能在某些边界情况下，`IsLandTile` 返回 `true` 但实际 tile 是海洋
+   - 或者预计算时 tile 是陆地，但后续被转换为海洋（虽然这种情况不太可能，因为预计算发生在 `Convert` hook 中，而 `Ocean_ConvertImpassibleToWater` 发生在更早的阶段）
+
+3. **查找时没有二次验证**:
+   - `FindNearestValidPosition` 直接返回预计算时存储的坐标，没有在返回前再次验证该坐标是否仍然是陆地 tile
+   - 如果预计算后某些 tile 被修改，返回的坐标可能就是海洋
+
+**最可能的根本原因**:
+- `DistanceToEdge` 对海洋 tile 返回 `math.huge`，导致海洋 tile 被错误地加入合法坐标集合
+- 需要在 `PrecomputeValidPositions` 中，调用 `DistanceToEdge` 前先检查 tile 是否是陆地，如果不是陆地，直接跳过
+
+**日志分析**:
+
+从最新日志中可以看到：
+```
+1262:[00:00:37]: [Move Entity V2] ⚠️  检测到 DefaultPigking 布局: 'DefaultPigking'	
+1263:[00:00:37]: [Move Entity V2] ✅ 找到最近的合法坐标: tile (264, 293) -> 世界坐标 (106.00, 222.00), 距离 15.56 tiles	
+1264:[00:00:37]: [Move Entity V2] 🔧 修改 pigking 布局坐标: 原坐标 (151.00, 179.00) -> 新坐标 (106.00, 222.00) [移动到合法位置，距离边缘 >= 8 tiles]	
+1265:[00:00:37]: [Move Entity V2] 布局 'DefaultPigking' -> 位置 (106.00, 222.00)	
+```
+
+**问题确认**:
+- pigking 被移动到了 tile (264, 293)，世界坐标 (106.00, 222.00)
+- 用户确认这个位置是海上
+- 预计算时找到了 9487 个合法坐标，但其中可能包含了海洋 tile
+
+**可能的原因**:
+
+1. **预计算时误判**:
+   - `PrecomputeValidPositions` 中虽然检查了 `IsLandTile`，但可能在某些边界情况下，`IsLandTile` 返回 `true` 但实际 tile 是海洋
+   - 或者 `DistanceToEdge` 被错误地调用在了非陆地 tile 上
+
+2. **DistanceToEdge 对海洋 tile 的处理**:
+   - 如果对海洋 tile 调用 `DistanceToEdge`，由于海洋 tile 不是陆地边缘，函数会搜索到 `max_radius` 后返回 `math.huge`
+   - 而 `math.huge >= 8` 为 `true`，导致海洋 tile 被错误地加入合法坐标集合
+
+3. **查找时没有二次验证**:
+   - `FindNearestValidPosition` 直接返回预计算时存储的坐标，没有在返回前再次验证该坐标是否仍然是陆地 tile
+   - 如果预计算后某些 tile 被修改，返回的坐标可能就是海洋
+
+**需要添加的验证**:
+
+1. 在 `PrecomputeValidPositions` 中，调用 `DistanceToEdge` 前，确保 tile 是陆地：
+   ```lua
+   if tile and TileGroupManager:IsLandTile(tile) and not TileGroupManager:IsOceanTile(tile) then
+       local dist_to_edge = DistanceToEdge(x, y, world, min_distance + 5, min_distance)
+       ...
+   end
+   ```
+
+2. 在 `DistanceToEdge` 函数开头，如果当前 tile 不是陆地，直接返回 `0`：
+   ```lua
+   local tile = world:GetTile(tile_x, tile_y)
+   if not tile or not TileGroupManager:IsLandTile(tile) then
+       return 0  -- 非陆地 tile，距离边缘为 0
+   end
+   ```
+
+3. 在 `FindNearestValidPosition` 中，返回坐标前再次验证：
+   ```lua
+   if best_pos then
+       -- 再次验证该位置是否是陆地
+       local tile = world:GetTile(best_pos.tx, best_pos.ty)
+       if not tile or not TileGroupManager:IsLandTile(tile) or TileGroupManager:IsOceanTile(tile) then
+           -- 跳过这个坐标，继续查找下一个
+           -- 或者从 VALID_POSITIONS 中移除这个无效坐标
+       end
+       return best_pos.world_x, best_pos.world_y, true
+   end
+   ```
+
