@@ -230,10 +230,10 @@ end
 
 -- 预计算所有合法坐标（距离边缘 >= min_distance 的陆地 tile）
 -- world: WorldSim 对象
--- min_distance: 最小距离（tile 单位，默认 8）
+-- min_distance: 最小距离（tile 单位，默认 6）
 -- 返回: 合法坐标数量
 function LandEdgeFinder.PrecomputeValidPositions(world, min_distance)
-    min_distance = min_distance or 8
+    min_distance = min_distance or 6
     
     -- 清空之前的合法坐标
     VALID_POSITIONS = {}

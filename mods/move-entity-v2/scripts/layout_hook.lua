@@ -59,8 +59,8 @@ local function InstallLayoutHook()
             if world then
                 local map_width, map_height = world:GetWorldSize()
                 if map_width and map_height then
-                    print("[Move Entity V2] [LayoutHook] 开始预计算合法坐标（距离边缘 >= 8 tiles）...")
-                    local valid_count = LandEdgeFinder.PrecomputeValidPositions(world, 8)
+                    print("[Move Entity V2] [LayoutHook] 开始预计算合法坐标（距离边缘 >= 6 tiles）...")
+                    local valid_count = LandEdgeFinder.PrecomputeValidPositions(world, 6)
                     if valid_count > 0 then
                         precomputed = true
                         print(string.format("[Move Entity V2] [LayoutHook] 预计算完成，找到 %d 个合法坐标", valid_count))
@@ -116,8 +116,8 @@ local function InstallLayoutHook()
         local old_rcx, old_rcy = world:ReserveSpace(node_id, size, layout.start_mask, layout.fill_mask, layout.layout_position, nil)
         
         if old_rcx then
-            -- 处理 pigking 布局坐标修改（只在这里调用一次）
-            -- 传入 world 对象以支持查找陆地边缘 tile
+            -- 处理特殊布局坐标修改（只在这里调用一次）
+            -- 传入 world 对象以支持查找合法坐标（距离边缘 >= 6 tiles）
             local new_rcx, new_rcy, should_modify = PigkingHandler.ProcessPosition(old_rcx, old_rcy, layout_name, world)
             
             -- 无论是否需要修改，都设置 position，避免进入 ReserveSpace Wrapper 分支
