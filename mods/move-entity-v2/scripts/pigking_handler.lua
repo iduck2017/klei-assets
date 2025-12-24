@@ -11,37 +11,34 @@ function PigkingHandler.IsPigkingLayout(layout_name)
     return layout_name_lower == "defaultpigking"
 end
 
--- 处理指定位置的 pigking 布局坐标修改
--- 返回: new_rcx, new_rcy, modified_position
-function PigkingHandler.ProcessManualPosition(position, layout_name)
-    -- position 在调用此函数前已经检查过，不会是 nil
-    if not PigkingHandler.IsPigkingLayout(layout_name) then
-        return position[1], position[2], position
+-- 统一的 pigking 布局坐标处理函数
+-- 输入: rcx, rcy (两个数字) 或 position (表)
+-- 返回: new_rcx, new_rcy, should_modify (boolean) 或 modified_position (表)
+function PigkingHandler.ProcessPosition(rcx_or_position, rcy_or_nil, layout_name)
+    -- 判断输入格式：是 position 表还是两个数字
+    local rcx, rcy
+    local is_table_input = type(rcx_or_position) == "table"
+    
+    if is_table_input then
+        -- 输入是 position 表
+        rcx = rcx_or_position[1]
+        rcy = rcx_or_position[2]
+    else
+        -- 输入是两个数字
+        rcx = rcx_or_position
+        rcy = rcy_or_nil
     end
     
-    local old_rcx, old_rcy = position[1], position[2]
-    local new_rcx = old_rcx + 8
-    local new_rcy = old_rcy + 8
-    
-    print(string.format(
-        "[Move Entity V2] ⚠️  检测到 DefaultPigking 布局: '%s'",
-        layout_name
-    ))
-    print(string.format(
-        "[Move Entity V2] 🔧 修改 pigking 布局坐标: 原坐标 (%.2f, %.2f) -> 新坐标 (%.2f, %.2f) [x+8, y+8]",
-        old_rcx, old_rcy, new_rcx, new_rcy
-    ))
-    
-    return new_rcx, new_rcy, {new_rcx, new_rcy}
-end
-
--- 处理自动寻找位置的 pigking 布局坐标修改
--- 返回: new_rcx, new_rcy, should_return_modified
-function PigkingHandler.ProcessAutoPosition(rcx, rcy, layout_name)
+    -- 检查是否是 pigking 布局
     if not PigkingHandler.IsPigkingLayout(layout_name) then
-        return rcx, rcy, false
+        if is_table_input then
+            return rcx, rcy, rcx_or_position
+        else
+            return rcx, rcy, false
+        end
     end
     
+    -- 修改坐标
     local old_rcx, old_rcy = rcx, rcy
     local new_rcx = old_rcx + 8
     local new_rcy = old_rcy + 8
@@ -55,7 +52,12 @@ function PigkingHandler.ProcessAutoPosition(rcx, rcy, layout_name)
         old_rcx, old_rcy, new_rcx, new_rcy
     ))
     
-    return new_rcx, new_rcy, true
+    -- 根据输入格式返回相应格式
+    if is_table_input then
+        return new_rcx, new_rcy, {new_rcx, new_rcy}
+    else
+        return new_rcx, new_rcy, true
+    end
 end
 
 -- 获取 pigking 布局的标记信息（用于日志输出）
