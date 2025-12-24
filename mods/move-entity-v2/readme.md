@@ -811,3 +811,686 @@ end
 
 ---
 
+## 调研：确保距离边缘的最小距离不少于 8 tiles
+
+**时间**: 2025-12-25
+
+**需求描述**:
+修改移动逻辑，不再是移动到边缘，而是确保 pigking 布局距离边缘的最小距离不少于 8 tiles (32 units)。如果当前位置距离边缘小于 8 tiles，则移动到符合条件的最近位置。
+
+**关键约束**:
+1. **最小距离**: 距离边缘至少 8 tiles (32 units)
+2. **移动目标**: 如果当前位置不符合要求，移动到符合条件的最近位置
+3. **坐标对齐**: 移动前后的 delta x 和 delta y 必须是 4 的倍数（TILE_SCALE）
+
+**实现方案分析**:
+
+### 方案1：从边缘向陆地内部移动（推荐）
+
+**思路**:
+1. 找到最近的陆地边缘 tile（使用现有的 `FindNearestLandEdgeTile`）
+2. 计算当前位置到边缘的距离
+3. 如果距离 < 8 tiles：
+   - 从边缘位置向陆地内部移动至少 8 tiles
+   - 找到第一个距离边缘 >= 8 tiles 的陆地 tile
+4. 如果距离 >= 8 tiles：
+   - 保持当前位置不变
+
+**优点**:
+- 逻辑清晰，易于实现
+- 可以复用现有的边缘查找逻辑
+- 移动方向明确（从边缘向陆地内部）
+
+**缺点**:
+- 如果当前位置已经在陆地深处，可能需要移动较远距离
+- 需要确定"向陆地内部"的方向
+
+### 方案2：从当前位置向陆地内部搜索
+
+**思路**:
+1. 检查当前位置距离边缘的距离
+2. 如果距离 < 8 tiles：
+   - 从当前位置开始，向陆地内部方向搜索
+   - 找到第一个距离边缘 >= 8 tiles 的陆地 tile
+3. 如果距离 >= 8 tiles：
+   - 保持当前位置不变
+
+**优点**:
+- 如果当前位置已经符合要求，不需要移动
+- 移动距离可能更短
+
+**缺点**:
+- 需要确定"向陆地内部"的方向
+- 如果当前位置在边缘附近，可能找不到符合条件的 tile
+
+### 推荐实现步骤（方案1）:
+
+1. **找到最近的边缘**:
+   ```lua
+   local edge_world_x, edge_world_y, found = FindNearestLandEdgeTile(world_x, world_y, world, max_radius)
+   ```
+
+2. **计算当前位置到边缘的距离**:
+   ```lua
+   local start_tx, start_ty = WorldToTileCoords(world_x, world_y, map_width, map_height)
+   local edge_tx, edge_ty = WorldToTileCoords(edge_world_x, edge_world_y, map_width, map_height)
+   local dist_to_edge = math.sqrt((start_tx - edge_tx)^2 + (start_ty - edge_ty)^2)
+   ```
+
+3. **如果距离 < 8 tiles，从边缘向陆地内部移动**:
+   - 计算从边缘到当前位置的方向向量（归一化）
+   - 从边缘位置开始，沿着这个方向向陆地内部移动至少 8 tiles
+   - 搜索符合条件的陆地 tile（距离边缘 >= 8 tiles）
+
+4. **如果距离 >= 8 tiles，保持当前位置不变**
+
+**关键实现细节**:
+
+1. **方向计算**:
+   ```lua
+   local dx = start_tx - edge_tx
+   local dy = start_ty - edge_ty
+   local dist = math.sqrt(dx^2 + dy^2)
+   if dist > 0 then
+       local dir_x = dx / dist  -- 归一化方向向量
+       local dir_y = dy / dist
+   else
+       -- 当前位置就是边缘，需要选择一个向陆地内部的方向
+       -- 可以搜索周围 8 个方向，找到第一个陆地 tile 的方向
+   end
+   ```
+
+2. **从边缘向陆地内部移动**:
+   ```lua
+   -- 从边缘位置开始，沿着方向向量移动至少 8 tiles
+   for step = 8, max_search_distance do
+       local tx = edge_tx + math.floor(dir_x * step)
+       local ty = edge_ty + math.floor(dir_y * step)
+       
+       -- 检查是否是陆地 tile
+       local tile = world:GetTile(tx, ty)
+       if tile and TileGroupManager:IsLandTile(tile) then
+           -- 检查距离边缘是否 >= 8 tiles
+           if DistanceToEdge(tx, ty, world) >= 8 then
+               return TileToWorldCoords(tx, ty, map_width, map_height)  -- 找到符合条件的 tile
+           end
+       end
+   end
+   ```
+
+3. **距离边缘的计算**:
+   ```lua
+   -- 检查一个 tile 距离边缘的距离（使用螺旋搜索）
+   function DistanceToEdge(tile_x, tile_y, world, max_radius)
+       max_radius = max_radius or 20
+       for radius = 0, max_radius do
+           for dx = -radius, radius do
+               for dy = -radius, radius do
+                   if math.abs(dx) == radius or math.abs(dy) == radius then
+                       local tx, ty = tile_x + dx, tile_y + dy
+                       if IsLandEdgeTile(world, tx, ty) then
+                           return radius  -- 返回距离（tile 单位）
+                       end
+                   end
+               end
+           end
+       end
+       return math.huge  -- 未找到边缘
+   end
+   ```
+
+**注意事项**:
+
+1. **坐标对齐**:
+   - 最终坐标必须是 tile 对齐的（4 的倍数）
+   - 使用 `TileToWorldCoords` 转换时，返回的是 tile 左下角坐标
+   - 确保移动距离是 4 的倍数
+
+2. **边界检查**:
+   - 需要检查 tile 坐标是否在世界范围内
+   - 避免访问无效的 tile 坐标
+
+3. **性能考虑**:
+   - 距离边缘的计算可能需要搜索较大范围（最多 20 tiles）
+   - 可以考虑限制搜索范围，或者使用近似算法
+
+4. **回退策略**:
+   - 如果找不到符合条件的 tile（距离边缘 >= 8 tiles），可以：
+     - 使用找到的距离边缘最远的 tile
+     - 或者使用原始坐标
+
+5. **特殊情况处理**:
+   - 如果当前位置就是边缘（距离 = 0），需要选择一个向陆地内部的方向
+   - 可以搜索周围 8 个方向，找到第一个陆地 tile 的方向
+
+**实现建议**:
+
+1. **修改 `LandEdgeFinder`**:
+   - 添加 `FindPositionWithMinDistanceFromEdge` 函数
+   - 添加 `DistanceToEdge` 辅助函数
+   - 复用现有的 `FindNearestLandEdgeTile` 和 `IsLandEdgeTile` 函数
+
+2. **修改 `PigkingHandler`**:
+   - 将 `ProcessPosition` 中的逻辑改为调用 `FindPositionWithMinDistanceFromEdge`
+   - 最小距离参数设置为 8 tiles
+
+3. **测试**:
+   - 测试当前位置距离边缘 < 8 tiles 的情况
+   - 测试当前位置距离边缘 >= 8 tiles 的情况（应该不移动）
+   - 测试边界情况（找不到符合条件的 tile、当前位置就是边缘）
+
+### 方案3：预计算合法坐标集合（用户提供）
+
+**思路**:
+1. 设置一个全局变量保存世界 map 的所有合法坐标（距离边缘 >= 8 tiles 的陆地 tile）
+2. 在世界生成时，预先计算并存储所有符合条件的坐标
+3. 在检查坐标时，从合法坐标集合中寻找距离当前位置最近的坐标并移动
+
+**优点**:
+- 性能好：只需要一次预计算，后续查找是 O(n) 或 O(log n)
+- 逻辑简单：只需要在合法坐标集合中找最近的点
+- 可以处理复杂地形：预先筛选出所有符合条件的坐标
+
+**缺点**:
+- 需要存储大量坐标（可能几千个 tile）
+- 需要确定何时进行预计算（世界生成阶段）
+- 如果世界生成失败重试，需要重新计算
+
+**实现步骤**:
+
+1. **预计算合法坐标集合**:
+   ```lua
+   -- 全局变量
+   local VALID_POSITIONS = {}  -- 存储所有距离边缘 >= 8 tiles 的坐标
+   
+   -- 在世界生成时调用
+   function PrecomputeValidPositions(world, map_width, map_height, min_distance)
+       min_distance = min_distance or 8  -- 最小距离（tile 单位）
+       VALID_POSITIONS = {}
+       
+       -- 遍历所有陆地 tile
+       for y = 0, map_height - 1 do
+           for x = 0, map_width - 1 do
+               local tile = world:GetTile(x, y)
+               if tile and TileGroupManager:IsLandTile(tile) then
+                   -- 检查距离边缘是否 >= min_distance
+                   local dist_to_edge = DistanceToEdge(x, y, world, min_distance + 5)
+                   if dist_to_edge >= min_distance then
+                       -- 转换为世界坐标并存储
+                       local world_x, world_y = TileToWorldCoords(x, y, map_width, map_height)
+                       table.insert(VALID_POSITIONS, {
+                           tx = x,
+                           ty = y,
+                           world_x = world_x,
+                           world_y = world_y
+                       })
+                   end
+               end
+           end
+       end
+       
+       print(string.format("[Move Entity V2] 预计算完成，找到 %d 个合法坐标", #VALID_POSITIONS))
+   end
+   ```
+
+2. **查找最近的合法坐标**:
+   ```lua
+   function FindNearestValidPosition(world_x, world_y, map_width, map_height)
+       if #VALID_POSITIONS == 0 then
+           -- 如果还没有预计算，返回原始坐标
+           return world_x, world_y, false
+       end
+       
+       local start_tx, start_ty = WorldToTileCoords(world_x, world_y, map_width, map_height)
+       local min_dist_sq = math.huge
+       local best_pos = nil
+       
+       -- 遍历所有合法坐标，找到最近的
+       for _, pos in ipairs(VALID_POSITIONS) do
+           local dx = pos.tx - start_tx
+           local dy = pos.ty - start_ty
+           local dist_sq = dx * dx + dy * dy
+           
+           if dist_sq < min_dist_sq then
+               min_dist_sq = dist_sq
+               best_pos = pos
+           end
+       end
+       
+       if best_pos then
+           return best_pos.world_x, best_pos.world_y, true
+       else
+           return world_x, world_y, false
+       end
+   end
+   ```
+
+3. **优化：使用空间索引**:
+   - 可以使用网格索引或四叉树来加速查找
+   - 或者按区域分组，只搜索附近的区域
+
+**关键实现细节**:
+
+1. **预计算时机**:
+   - 可以在 `modworldgenmain.lua` 中，在布局放置之前进行预计算
+   - 或者使用 `AddSimPostInit` 在世界生成完成后计算（但此时可能已经太晚了）
+
+2. **存储格式**:
+   ```lua
+   VALID_POSITIONS = {
+       {tx = 100, ty = 150, world_x = 200.0, world_y = 300.0},
+       {tx = 101, ty = 150, world_x = 204.0, world_y = 300.0},
+       -- ...
+   }
+   ```
+
+3. **性能优化**:
+   - 可以只存储 tile 坐标，需要时再转换为世界坐标
+   - 可以使用哈希表按区域索引，加速查找
+   - 可以限制搜索范围（只搜索附近的合法坐标）
+
+4. **边界情况**:
+   - 如果预计算时还没有找到合法坐标，可以回退到原始坐标
+   - 如果合法坐标集合为空，说明地图太小或地形特殊
+
+**实现建议**:
+
+1. **在 `LandEdgeFinder` 中添加**:
+   - `PrecomputeValidPositions` 函数
+   - `FindNearestValidPosition` 函数
+   - 全局变量 `VALID_POSITIONS`
+
+2. **在 `modworldgenmain.lua` 中调用**:
+   ```lua
+   local LandEdgeFinder = require("land_edge_finder")
+   LandEdgeFinder.PrecomputeValidPositions(WorldSim, map_width, map_height, 8)
+   ```
+
+3. **修改 `PigkingHandler`**:
+   - 将 `ProcessPosition` 中的逻辑改为调用 `FindNearestValidPosition`
+
+**注意事项**:
+
+1. **预计算时机**:
+   - 需要确保在世界生成阶段，所有 tile 都已经生成
+   - 需要在布局放置之前完成预计算
+
+2. **内存占用**:
+   - 合法坐标可能很多（几千个），但每个坐标只存储几个数字，内存占用不大
+
+3. **世界生成重试**:
+   - 如果世界生成失败重试，需要重新计算合法坐标集合
+   - 可以在每次世界生成开始时清空并重新计算
+
+---
+
+## 调研：扩展移动逻辑到其他 Layout
+
+**需求**: 除了 `DefaultPigking` 之外，还需要对以下 layout 应用相同的移动逻辑（移动到距离边缘至少 8 tiles 的位置）。
+
+**重要区分**: Layout vs Prefab vs Room
+- **Layout**: 在 `src/map/layouts.lua` 中定义的静态布局，通过 `object_layout.Convert` 放置
+- **Prefab**: 游戏中的实体对象（如 `dragonfly_spawner`、`beequeenhive` 等）
+- **Room**: 在世界生成时定义的区域，可能使用 `countprefabs` 直接放置 prefab，或使用 `countstaticlayouts` 放置 layout
+
+### Layout 名称调研
+
+通过阅读源码 (`src/map/layouts.lua` 和相关文件)，确认了以下内容：
+
+#### 1. **BeeQueen (蜜蜂女王)**
+- **类型**: Prefab (`beequeenhive`)
+- **放置方式**: 通过 Room `BeeQueenBee` 的 `countprefabs` 直接放置
+- **位置**: `src/map/rooms/forest/bee.lua:19`
+- **说明**: 不是 layout，是 room 直接放置的 prefab
+- **结论**: ❌ **无法通过 hook layout 处理**，需要 hook room 的 prefab 放置机制（更复杂）
+
+#### 2. **Dragonfly (龙蝇)**
+- **类型**: Layout + Prefab
+- **Layout 名称**: `DragonflyArena`
+- **Prefab 名称**: `dragonfly_spawner`
+- **定义位置**: `src/map/layouts.lua:899`
+- **说明**: `DragonflyArena` layout 包含 `dragonfly_spawner` prefab（在 `dragonfly_arena.lua:157` 中定义）
+- **状态**: ✅ **可以通过 hook layout 处理**
+
+#### 3. **Moon Stage (月亮舞台)**
+- **类型**: Layout + Prefab
+- **Layout 名称**: `MoonbaseOne`
+- **Prefab 名称**: `moonbase` (月亮设备)
+- **定义位置**: `src/map/layouts.lua:936`
+- **说明**: 月亮基地 layout，包含 `moonbase` prefab
+- **状态**: ✅ **可以通过 hook layout 处理**
+- **注意**: 用户提到的 "moonstage" 可能指的是这个 layout
+
+#### 4. **Charlie Stage (查理舞台)**
+- **类型**: Layout + Prefab
+- **Layout 名称**: `Charlie1` 和 `Charlie2`
+- **Prefab 名称**: `charlie_stage_post`
+- **定义位置**: `src/map/layouts.lua:439-440`
+- **说明**: 两个 layout 都包含 `charlie_stage_post` prefab（查理舞台）
+- **状态**: ✅ **可以通过 hook layout 处理**（两个 layout 都需要）
+
+#### 5. **Oasis (绿洲)**
+- **类型**: Layout + Prefab
+- **Layout 名称**: `Oasis`
+- **Prefab 名称**: `oasislake`
+- **定义位置**: `src/map/layouts.lua:967`
+- **说明**: 绿洲 layout，包含 `oasislake` prefab
+- **状态**: ✅ **可以通过 hook layout 处理**
+
+#### 6. **Multiplayer Gate (多人传送门)**
+- **类型**: Prefab (`multiplayer_portal`)
+- **放置方式**: 出现在以下 layout 中：
+  - `DefaultStart` (默认起始点)
+  - `DefaultPlusStart` (默认+起始点)
+  - `CaveStart` (洞穴起始点)
+  - `GrottoStart` (洞穴入口起始点)
+- **说明**: `multiplayer_portal` 是 prefab，但它是 layout 的一部分
+- **结论**: ❓ **可以通过 hook layout 处理**，但需要确认是否处理起始点 layout（通常起始点不应该移动）
+
+#### 7. **Junkyard (垃圾场)**
+- **类型**: Layout + Prefab
+- **Layout 名称**: `junk_yard`
+- **Prefab 名称**: `junk_pile`、`junk_pile_big`、`storage_robot` 等
+- **定义位置**: `src/map/layouts.lua:1375`
+- **说明**: 垃圾场 layout，包含多个 prefab
+- **状态**: ✅ **可以通过 hook layout 处理**
+
+### 需要处理的 Layout 列表
+
+根据调研结果，以下 layout **可以通过 hook layout 机制处理**：
+
+1. ✅ `DefaultPigking` - 猪王（已实现）
+2. ✅ `DragonflyArena` - 龙蝇竞技场（包含 `dragonfly_spawner` prefab）
+3. ✅ `MoonbaseOne` - 月亮基地（包含 `moonbase` prefab）
+4. ✅ `Charlie1` - 查理舞台 1（包含 `charlie_stage_post` prefab）
+5. ✅ `Charlie2` - 查理舞台 2（包含 `charlie_stage_post` prefab）
+6. ✅ `Oasis` - 绿洲（包含 `oasislake` prefab）
+7. ✅ `junk_yard` - 垃圾场（包含多个 prefab）
+
+**待确认**:
+- ❓ `DefaultStart`、`DefaultPlusStart`、`CaveStart` 等起始点 layout（包含 `multiplayer_portal` prefab，但通常起始点不应该移动）
+
+**无法通过 hook layout 处理**:
+- ❌ `beequeenhive` - 通过 Room `BeeQueenBee` 的 `countprefabs` 直接放置，不是 layout
+  - 如果需要处理，需要 hook room 的 prefab 放置机制（更复杂，需要额外调研）
+
+### 实现方案
+
+1. **修改 `PigkingHandler`**:
+   - 重命名为更通用的名称（如 `LayoutHandler` 或 `SpecialLayoutHandler`）
+   - 将 `IsPigkingLayout` 改为 `ShouldMoveLayout`，支持多个 layout 名称
+   - 使用 layout 名称列表进行匹配
+
+2. **Layout 名称匹配**:
+   ```lua
+   local SPECIAL_LAYOUTS = {
+       "DefaultPigking",
+       "DragonflyArena",
+       "MoonbaseOne",
+       "Charlie1",
+       "Charlie2",
+       "Oasis",
+       "junk_yard",
+   }
+   
+   function LayoutHandler.ShouldMoveLayout(layout_name)
+       if not layout_name then
+           return false
+       end
+       local layout_name_lower = string.lower(layout_name)
+       for _, special_layout in ipairs(SPECIAL_LAYOUTS) do
+           if layout_name_lower == string.lower(special_layout) then
+               return true
+           end
+       end
+       return false
+   end
+   ```
+
+3. **保持向后兼容**:
+   - 保留 `IsPigkingLayout` 函数（内部调用 `ShouldMoveLayout`）
+   - 更新日志消息，使其更通用
+
+### 注意事项
+
+1. **Layout vs Prefab vs Room**:
+   - **Layout**: 可以通过现有的 hook 机制处理（`object_layout.Convert`）
+   - **Prefab**: 如果是 layout 的一部分，可以通过 hook layout 处理；如果是 room 直接放置的，需要额外机制
+   - **Room**: 使用 `countprefabs` 直接放置的 prefab 无法通过 hook layout 处理
+
+2. **起始点 Layout**: 
+   - `DefaultStart` 等起始点 layout 包含 `multiplayer_portal`，但通常不应该移动起始点
+   - 需要用户确认是否要处理这些 layout
+
+3. **Layout 名称大小写**:
+   - 所有 layout 名称在 `layouts.lua` 中都是首字母大写的格式（如 `DragonflyArena`）
+   - 匹配时应该使用不区分大小写的比较
+
+4. **测试**:
+   - 每个 layout 都需要测试，确保移动逻辑正常工作
+   - 特别要注意大型 layout（如 `DragonflyArena`）的移动是否正确
+   - 确保 layout 中的所有 prefab 和 ground tiles 都正确移动
+
+5. **BeeQueen 的特殊情况**:
+   - `beequeenhive` 是通过 room 的 `countprefabs` 直接放置的，不是 layout
+   - 如果需要处理，需要调研如何 hook room 的 prefab 放置机制
+   - 可能需要 hook `PopulateVoronoi` 或相关的 room 处理函数
+
+---
+
+## 调研：单个 Prefab 的移动劫持方案
+
+**需求**: 对于通过 room 的 `countprefabs` 直接放置的 prefab（如 `beequeenhive`），需要调研如何 hook 它们的放置过程以实现移动。
+
+### Prefab 放置机制分析
+
+#### 1. **通过 `countprefabs` 放置的 Prefab**
+
+**流程**:
+1. Room 定义中使用 `countprefabs` 指定要放置的 prefab 和数量
+   ```lua
+   AddRoom("BeeQueenBee", {
+       contents = {
+           countprefabs = {
+               beequeenhive = 1,
+           }
+       }
+   })
+   ```
+
+2. 在世界生成时，`Node:PopulateVoronoi` 方法处理 `countprefabs`
+   - 位置: `src/map/graphnode.lua:330-426`
+   - 获取放置点: `WorldSim:GetPointsForSite(self.id)` 返回 `points_x, points_y`
+   - 调用: `self:AddEntity(prefab, points_x, points_y, current_pos_idx, ...)`
+
+3. `Node:AddEntity` 方法
+   - 位置: `src/map/graphnode.lua:238-245`
+   - 检查 tile 是否是陆地
+   - 调用: `PopulateWorld_AddEntity(prefab, tile_x, tile_y, ...)`
+
+4. `PopulateWorld_AddEntity` 全局函数
+   - 位置: `src/map/graphnode.lua:188-235`
+   - 将 tile 坐标转换为世界坐标
+   - 添加到 `entitiesOut[prefab]` 表中
+
+#### 2. **Hook 点分析**
+
+**方案 1: Hook `PopulateWorld_AddEntity` 全局函数** ⭐ **推荐**
+
+**优点**:
+- 简单直接，所有 prefab 放置都会经过这个函数
+- 统一处理，不需要区分不同的放置方式
+- 可以获取 prefab 名称和坐标
+
+**实现思路**:
+```lua
+-- 在 modworldgenmain.lua 中
+local graphnode = require("map/graphnode")
+local original_PopulateWorld_AddEntity = graphnode.PopulateWorld_AddEntity
+
+graphnode.PopulateWorld_AddEntity = function(prefab, tile_x, tile_y, tile_value, entitiesOut, width, height, prefab_list, prefab_data, rand_offset)
+    -- 检查是否是特殊 prefab
+    if ShouldMovePrefab(prefab) then
+        -- 转换为世界坐标
+        local world_x = (tile_x - width/2.0) * TILE_SCALE
+        local world_y = (tile_y - height/2.0) * TILE_SCALE
+        
+        -- 查找合法坐标
+        local new_world_x, new_world_y, found = LandEdgeFinder.FindNearestValidPosition(world_x, world_y, WorldSim)
+        
+        if found then
+            -- 转换回 tile 坐标
+            local new_tile_x = math.floor((width / 2) + 0.5 + (new_world_x / TILE_SCALE))
+            local new_tile_y = math.floor((height / 2) + 0.5 + (new_world_y / TILE_SCALE))
+            
+            -- 使用新坐标调用原始函数
+            return original_PopulateWorld_AddEntity(prefab, new_tile_x, new_tile_y, tile_value, entitiesOut, width, height, prefab_list, prefab_data, rand_offset)
+        end
+    end
+    
+    -- 普通 prefab，使用原始坐标
+    return original_PopulateWorld_AddEntity(prefab, tile_x, tile_y, tile_value, entitiesOut, width, height, prefab_list, prefab_data, rand_offset)
+end
+```
+
+**注意事项**:
+- `PopulateWorld_AddEntity` 是**全局函数**（在 `graphnode.lua` 中定义，没有 `local` 关键字）
+- 可以通过 `_G.PopulateWorld_AddEntity` 或直接通过 `PopulateWorld_AddEntity` 访问（需要先 `require("map/graphnode")` 加载模块）
+- 需要验证 hook 后不会影响 layout 中的 prefab（layout 已经通过 layout hook 处理）
+
+**方案 2: Hook `Node:AddEntity` 方法**
+
+**优点**:
+- 可以访问 Node 信息（如 node_id）
+- 在 tile 验证之后，确保是陆地 tile
+
+**缺点**:
+- 需要 hook Node 类的 metatable
+- 实现较复杂
+
+**方案 3: Hook `Node:PopulateVoronoi` 方法**
+
+**优点**:
+- 可以在获取放置点之前修改逻辑
+- 可以完全控制 prefab 的放置过程
+
+**缺点**:
+- 需要重新实现整个 `PopulateVoronoi` 逻辑
+- 复杂度高，容易出错
+
+### 关键函数签名
+
+#### `PopulateWorld_AddEntity`
+```lua
+function PopulateWorld_AddEntity(prefab, tile_x, tile_y, tile_value, entitiesOut, width, height, prefab_list, prefab_data, rand_offset)
+    -- prefab: prefab 名称（字符串）
+    -- tile_x, tile_y: tile 坐标（整数）
+    -- tile_value: tile 类型值
+    -- entitiesOut: 输出表，entitiesOut[prefab] 存储所有该 prefab 的坐标
+    -- width, height: 地图尺寸（tile 单位）
+    -- prefab_list: prefab 计数表
+    -- prefab_data: prefab 的额外数据
+    -- rand_offset: 是否添加随机偏移（boolean）
+    
+    -- 内部逻辑：
+    -- 1. ReserveTile(tile_x, tile_y)
+    -- 2. 转换为世界坐标: x = (tile_x - width/2.0) * TILE_SCALE
+    -- 3. 如果 rand_offset，添加随机偏移
+    -- 4. 添加到 entitiesOut[prefab] 表
+end
+```
+
+#### `Node:AddEntity`
+```lua
+function Node:AddEntity(prefab, points_x, points_y, current_pos_idx, entitiesOut, width, height, prefab_list, prefab_data, rand_offset)
+    -- self: Node 实例
+    -- prefab: prefab 名称
+    -- points_x, points_y: 放置点数组
+    -- current_pos_idx: 当前使用的点索引
+    -- 其他参数同 PopulateWorld_AddEntity
+    
+    -- 内部逻辑：
+    -- 1. 检查 tile 是否是陆地
+    -- 2. 调用 PopulateWorld_AddEntity
+end
+```
+
+### 坐标转换
+
+**Tile 坐标 → 世界坐标**:
+```lua
+local world_x = (tile_x - width/2.0) * TILE_SCALE
+local world_y = (tile_y - height/2.0) * TILE_SCALE
+```
+
+**世界坐标 → Tile 坐标**:
+```lua
+local tile_x = math.floor((width / 2) + 0.5 + (world_x / TILE_SCALE))
+local tile_y = math.floor((height / 2) + 0.5 + (world_y / TILE_SCALE))
+```
+
+### 需要移动的 Prefab 列表
+
+根据之前的调研，以下 prefab 需要通过 hook 机制处理：
+
+1. **`beequeenhive`** - 蜜蜂女王蜂巢
+   - 通过 Room `BeeQueenBee` 的 `countprefabs` 放置
+   - 位置: `src/map/rooms/forest/bee.lua:19`
+
+### 实现建议
+
+1. **创建 `prefab_handler.lua` 模块**:
+   - 定义需要移动的 prefab 列表
+   - 实现 `ShouldMovePrefab(prefab_name)` 函数
+   - 实现 `ProcessPrefabPosition` 函数（类似 `ProcessPosition`）
+
+2. **Hook `PopulateWorld_AddEntity`**:
+   - 在 `modworldgenmain.lua` 中 hook
+   - 检查 prefab 名称
+   - 如果需要移动，修改 tile 坐标后调用原始函数
+
+3. **坐标验证**:
+   - 确保新坐标是合法的 tile 坐标（整数）
+   - 确保新坐标在地图范围内
+   - 确保新坐标是陆地 tile
+
+### 注意事项
+
+1. **`PopulateWorld_AddEntity` 的访问方式**:
+   - 需要确认这个函数是全局函数还是模块导出
+   - 可能需要通过 `require("map/graphnode")` 访问，或者直接 hook 全局函数
+
+2. **`rand_offset` 参数**:
+   - 如果 `rand_offset == true`，原始函数会添加随机偏移
+   - 移动后的坐标也需要考虑这个偏移
+
+3. **`ReserveTile` 调用**:
+   - 原始函数会调用 `WorldSim:ReserveTile(tile_x, tile_y)`
+   - 如果修改了坐标，需要确保新坐标也被正确保留
+
+4. **性能考虑**:
+   - 每个 prefab 放置都会经过 hook，需要快速判断
+   - 可以使用简单的字符串匹配或哈希表查找
+
+5. **与 Layout Hook 的协调**:
+   - Layout 中的 prefab 也会经过 `PopulateWorld_AddEntity`
+   - 需要区分是 layout 中的 prefab 还是直接放置的 prefab
+   - 或者统一处理，layout hook 只处理 layout 整体移动，prefab hook 处理单个 prefab
+
+### 待验证的问题
+
+1. **`PopulateWorld_AddEntity` 的访问方式**: ✅ **已确认**
+   - 是**全局函数**（在 `graphnode.lua:188` 定义，没有 `local` 关键字）
+   - 可以通过 `_G.PopulateWorld_AddEntity` 或直接访问（需要先 `require("map/graphnode")`）
+   - Hook 方式: `local original = _G.PopulateWorld_AddEntity` 或 `local graphnode = require("map/graphnode"); local original = graphnode.PopulateWorld_AddEntity`
+
+2. **Layout 中的 Prefab**:
+   - Layout 中的 prefab 是否也会经过 `PopulateWorld_AddEntity`？
+   - 如果是，如何区分 layout prefab 和直接放置的 prefab？
+
+3. **坐标修改的时机**:
+   - 在 `PopulateWorld_AddEntity` 中修改坐标是否会影响其他系统？
+   - 是否需要同时修改 `ReserveTile` 的调用？
+
+---
+
