@@ -717,3 +717,196 @@ Convert Hook:
 - [ ] 测试地皮和 prefabs 是否都在正确位置
 - [ ] 验证地皮只放置一次
 
+---
+
+## 2025-12-24 坐标被修改两次的问题
+
+### 问题描述
+
+在实现过程中发现，`DefaultPigking` 布局的坐标被修改了两次，导致最终坐标偏移了 `x+16, y+16` 而不是预期的 `x+8, y+8`。
+
+### 问题原因
+
+**调用流程分析**：
+
+1. **Convert Hook** 中：
+   - 调用 `ProcessPosition` 修改坐标：`(197.00, 33.00) -> (205.00, 41.00)` ✅
+   - 设置 `position = {205.00, 41.00}`
+   - 调用 `obj_layout.ReserveAndPlaceLayout(..., position, ...)`
+
+2. **ReserveAndPlaceLayout Hook** 中：
+   - 接收到 `position = {205.00, 41.00}`（来自 Convert Hook）
+   - 又调用了一次 `ProcessManualPosition` 修改坐标：`(205.00, 41.00) -> (213.00, 49.00)` ❌
+   - 导致坐标被修改了两次
+
+**根本原因**：
+- `Convert Hook` 调用了 `obj_layout.ReserveAndPlaceLayout`（这是我们 hook 的函数）
+- 这会触发 `ReserveAndPlaceLayout Hook`
+- 在 `ReserveAndPlaceLayout Hook` 中，当 `position` 不为 nil 时，又调用了一次 `ProcessManualPosition`
+
+### 解决方案
+
+**方案1：使用标记区分**（初始方案）
+- 在 `Convert Hook` 中，创建 `position` 时添加标记 `_from_convert_hook = true`
+- 在 `ReserveAndPlaceLayout Hook` 中，检查该标记：
+  - 如果有标记 → 来自 Convert Hook（已处理），直接使用，不再处理
+  - 如果没有标记 → 来自其他地方，需要处理
+
+**方案2：统一调用一次 ProcessPosition**（最终方案）
+- 合并 `ProcessAutoPosition` 和 `ProcessManualPosition` 为统一的 `ProcessPosition` 函数
+- 只在 `Convert Hook` 中调用一次 `ProcessPosition`
+- 在 `ReserveAndPlaceLayout Hook` 中，如果 `position` 不为 nil，直接使用（不再处理）
+- 这样确保 `ProcessPosition` 只调用一次
+
+### 修复后的调用流程
+
+```
+Convert Hook
+  ↓
+调用 ProcessPosition (只在这里调用一次) ✅
+  ↓
+修改坐标: (197, 33) -> (205, 41)
+  ↓
+设置 position = {205, 41}
+  ↓
+调用 ReserveAndPlaceLayout Hook
+  ↓
+检查 position 不为 nil
+  ↓
+直接使用 position（不再处理）✅
+```
+
+### 验证结果
+
+修复后，日志显示：
+- ✅ 坐标只修改一次：`(290.00, 84.00) -> (298.00, 92.00) [x+8, y+8]`
+- ✅ 最终位置正确：`位置 (298.00, 92.00)`
+- ✅ pigking 验证通过：`Checking Required Prefab pigking has at least 1 instances (1 found)`
+
+---
+
+## 问题：陆地边缘查找失败
+
+**时间**: 2025-12-25
+
+**问题描述**:
+实现陆地边缘查找功能后，日志显示虽然搜索到了陆地和海洋，但没有找到"陆地边缘"（既是陆地，又相邻有海洋的 tile）。
+
+**日志信息**:
+```
+[00:00:36]: [Move Entity V2] [LandEdgeFinder] 开始查找陆地边缘: 起始世界坐标 (244.00, 323.00), 最大半径 20 tiles
+[00:00:36]: [Move Entity V2] [LandEdgeFinder] 地图尺寸: 425 x 425 tiles
+[00:00:36]: [Move Entity V2] [LandEdgeFinder] 起始 tile 坐标: (274, 293)
+[00:00:36]: [Move Entity V2] [LandEdgeFinder] 起始位置 tile 类型: 1 (陆地: false, 海洋: false)
+[00:00:36]: [Move Entity V2] ⚠️  在半径 20 tiles 内未找到陆地边缘，使用原始坐标 (搜索了 1681 个 tiles, 找到 618 个陆地, 473 个海洋)
+```
+
+**分析**:
+1. **起始位置 tile 类型是 1** (`GROUND.IMPASSABLE`)，既不是陆地也不是海洋
+2. **搜索统计**：搜索了 1681 个 tiles，找到 618 个陆地，473 个海洋
+3. **问题**：虽然找到了陆地和海洋，但没有找到"陆地边缘"（既是陆地，又相邻有海洋的 tile）
+
+**可能的原因**:
+1. **pigking 生成在陆地深处**：周围都是陆地，没有海洋
+2. **陆地和海洋之间有其他类型 tile**：比如 `IMPASSABLE` (1)，导致边缘判断失败
+3. **搜索半径不够**：20 tiles 可能不足以从陆地深处找到边缘
+4. **边缘判断逻辑过于严格**：要求陆地 tile 必须直接相邻海洋 tile
+
+**当前边缘判断逻辑**:
+```lua
+IsLandEdgeTile(tile_x, tile_y):
+  1. 当前 tile 必须是陆地
+  2. 周围 8 个方向至少有一个是海洋 tile
+```
+
+**待验证**:
+- 是否需要增加搜索半径？
+- 是否需要放宽边缘判断条件（允许中间有其他类型 tile）？
+- 是否需要先找到最近的海洋，然后从海洋向陆地搜索边缘？
+
+---
+
+## 问题：海洋 tile 在世界生成时还不完整
+
+**时间**: 2025-12-25
+
+**问题描述**:
+在查找陆地边缘时，虽然搜索到了陆地和海洋，但没有找到"陆地边缘"（既是陆地，又相邻有海洋的 tile）。经过源码调研，发现问题的根本原因。
+
+**源码调研结果**:
+
+**世界生成顺序** (`src/map/forest_map.lua:866-887`):
+1. `PopulateVoronoi` (line 871) - 放置所有陆地布局，包括 `DefaultPigking`
+   - 此时会调用 `Convert` hook，我们的代码在这里执行
+2. `Ocean_ConvertImpassibleToWater` (line 883) - **将 `IMPASSABLE` tile 转换为海洋 tile**
+   - 这一步在布局放置**之后**执行
+
+**关键发现** (`src/map/ocean_gen.lua:241-261`):
+```lua
+for y = 0, height - 1, 1 do
+    for x = 0, width - 1, 1 do
+        local ground = world:GetTile(x, y)
+        if ground == WORLD_TILES.IMPASSABLE then
+            -- 转换为海洋 tile (OCEAN_SWELL, OCEAN_ROUGH, OCEAN_HAZARDOUS 等)
+            world:SetTile(x, y, WORLD_TILES.OCEAN_SWELL)
+        end
+    end
+end
+```
+
+**问题根源**:
+- 当 `Convert` hook 执行时，`Ocean_ConvertImpassibleToWater` 还没有执行
+- 海洋区域此时还是 `IMPASSABLE` (1) tile，而不是海洋 tile
+- 因此 `TileGroupManager:IsOceanTile(tile)` 返回 `false`（因为 `IMPASSABLE = 1` 不在海洋 tile 范围内）
+- 导致无法找到"陆地边缘"（陆地 tile 相邻海洋 tile）
+
+**证据**:
+- 日志显示起始位置 tile 类型是 `1` (`GROUND.IMPASSABLE`)
+- 搜索到了 618 个陆地和 473 个"海洋"，但实际上这些"海洋"可能是其他类型 tile
+- 没有找到陆地边缘，因为真正的海洋 tile 还不存在
+
+**解决方案**:
+在查找陆地边缘时，需要将 `IMPASSABLE` tile 视为"未来的海洋"：
+- 如果当前 tile 是陆地
+- 且周围有 `IMPASSABLE` tile（这些会在后续转换为海洋）
+- 则视为陆地边缘
+
+**实现方式**:
+修改 `IsLandEdgeTile` 函数，在检查相邻 tile 时：
+- 不仅检查 `TileGroupManager:IsOceanTile(neighbor_tile)`
+- 还要检查 `neighbor_tile == WORLD_TILES.IMPASSABLE`
+
+---
+
+## 观察：世界生成重试导致多次执行
+
+**时间**: 2025-12-25
+
+**观察描述**:
+日志显示 `DefaultPigking` 布局被检测和处理了多次（4次），但最终游戏中只有一个 pigking。
+
+**原因分析**:
+
+从日志时间线可以看出：
+1. **00:00:32** - 第一次世界生成成功，检测到 pigking
+2. **00:00:33** - 世界生成错误，重试 1/5：`An error occured during world gen we will retry! [was 1 of 5]`
+3. **00:00:35** - 重试后的世界生成成功，检测到 pigking
+4. **00:00:36** - 世界生成错误，重试 2/5：`An error occured during world gen we will retry! [was 2 of 5]`
+5. **00:00:43** - 重试后的世界生成成功，检测到 pigking
+6. **00:00:44** - 世界生成错误，重试 3/5：`An error occured during world gen we will retry! [was 3 of 5]`
+7. **00:00:45** - 重试后的世界生成成功，检测到 pigking
+
+**结论**:
+这是 DST 的正常行为。DST 的世界生成有重试机制（最多 5 次）。如果生成失败（例如缺少必需的 prefab、验证失败等），会重新生成整个世界。
+
+每次重试都会：
+1. 重新生成世界
+2. 重新调用 `Convert` hook
+3. 重新检测和移动 pigking
+
+**重要**：
+- 最终只有最后一次成功的世界生成会被使用
+- 前面的重试是生成过程中的尝试，最终会被丢弃
+- 所以最终游戏中只有一个 pigking
+- 这是 DST 的正常机制，不是 bug
+

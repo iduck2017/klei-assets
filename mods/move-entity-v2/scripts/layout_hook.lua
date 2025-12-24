@@ -93,7 +93,8 @@ local function InstallLayoutHook()
         
         if old_rcx then
             -- 处理 pigking 布局坐标修改（只在这里调用一次）
-            local new_rcx, new_rcy, should_modify = PigkingHandler.ProcessPosition(old_rcx, old_rcy, layout_name)
+            -- 传入 world 对象以支持查找陆地边缘 tile
+            local new_rcx, new_rcy, should_modify = PigkingHandler.ProcessPosition(old_rcx, old_rcy, layout_name, world)
             
             -- 无论是否需要修改，都设置 position，避免进入 ReserveSpace Wrapper 分支
             -- 这样可以确保 ProcessPosition 只调用一次

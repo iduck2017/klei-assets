@@ -616,3 +616,198 @@ ReserveAndPlaceLayout(node_id, layout, prefabs, add_entity) (object_layout.lua:2
 
 ---
 
+## 调研：移动到最近的陆地边缘 Tile
+
+### 需求描述
+
+将移动逻辑从简单的坐标偏移（x+8, y+8）改为：**移动到最近的、贴近陆地边缘的 tile 上**。
+
+### 关键 API 调研
+
+#### 1. Tile 坐标系统
+
+- **TILE_SCALE**: `4.0`（定义在 `src/constants.lua:17`）
+  - 每个 tile 的尺寸是 4x4 单位
+  - 世界坐标和 tile 坐标的转换：`tile_coord = world_coord / TILE_SCALE`
+
+#### 2. Map API（`TheWorld.Map` 或 `WorldSim`）
+
+**坐标转换**:
+- `Map:GetTileCoordsAtPoint(x, y, z)` → 返回 `(tx, ty)` tile 坐标
+- `Map:GetTileCenterPoint(tx, ty)` → 返回 `(cx, cy, cz)` tile 中心点的世界坐标
+
+**Tile 查询**:
+- `Map:GetTileAtPoint(x, y, z)` → 返回世界坐标点的 tile 类型（数字）
+- `Map:GetTile(tx, ty)` → 返回 tile 坐标的 tile 类型（数字）
+
+**Tile 类型检查**:
+- `Map:IsLandTileAtPoint(x, y, z)` → 检查世界坐标点是否是陆地 tile
+- `Map:IsOceanTileAtPoint(x, y, z)` → 检查世界坐标点是否是海洋 tile
+
+#### 3. TileGroupManager API
+
+- `TileGroupManager:IsLandTile(tile)` → 检查 tile 类型是否是陆地
+- `TileGroupManager:IsOceanTile(tile)` → 检查 tile 类型是否是海洋
+
+**相关代码位置**:
+- `src/components/map.lua:75-93` - Map tile 检查函数
+- `src/tilegroups.lua` - TileGroupManager 定义
+
+### 陆地边缘的定义
+
+**陆地边缘 tile** 需要满足以下条件：
+1. 该 tile 本身是**陆地 tile**（`TileGroupManager:IsLandTile(tile) == true`）
+2. 该 tile 的**周围 8 个方向**（上、下、左、右、左上、右上、左下、右下）中，**至少有一个是海洋 tile**
+
+**8 个方向的偏移**:
+```lua
+local directions = {
+    {0, 1},   -- 上
+    {0, -1},  -- 下
+    {-1, 0},  -- 左
+    {1, 0},   -- 右
+    {-1, 1},  -- 左上
+    {1, 1},   -- 右上
+    {-1, -1}, -- 左下
+    {1, -1}   -- 右下
+}
+```
+
+### 搜索策略
+
+#### 方案 1: 螺旋搜索（推荐）
+
+从原始坐标开始，以螺旋方式向外搜索：
+
+```lua
+function FindNearestLandEdgeTile(start_x, start_y, max_radius)
+    local map = WorldSim  -- 或 TheWorld.Map（取决于世界生成阶段）
+    local start_tx, start_ty = map:GetTileCoordsAtPoint(start_x, 0, start_y)
+    
+    -- 螺旋搜索：从内到外，逐层搜索
+    for radius = 0, max_radius do
+        for dx = -radius, radius do
+            for dy = -radius, radius do
+                -- 只检查当前层的边界 tile（避免重复检查内层）
+                if math.abs(dx) == radius or math.abs(dy) == radius then
+                    local tx, ty = start_tx + dx, start_ty + dy
+                    local tile = map:GetTile(tx, ty)
+                    
+                    if TileGroupManager:IsLandTile(tile) then
+                        -- 检查是否是陆地边缘
+                        if IsLandEdgeTile(map, tx, ty) then
+                            local cx, _, cy = map:GetTileCenterPoint(tx, ty)
+                            return cx, cy  -- 返回 tile 中心点的世界坐标
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    return nil, nil  -- 未找到
+end
+
+function IsLandEdgeTile(map, tx, ty)
+    local directions = {
+        {0, 1}, {0, -1}, {-1, 0}, {1, 0},
+        {-1, 1}, {1, 1}, {-1, -1}, {1, -1}
+    }
+    
+    for _, dir in ipairs(directions) do
+        local neighbor_tile = map:GetTile(tx + dir[1], ty + dir[2])
+        if TileGroupManager:IsOceanTile(neighbor_tile) then
+            return true  -- 找到相邻的海洋 tile，说明是陆地边缘
+        end
+    end
+    
+    return false
+end
+```
+
+#### 方案 2: 同心圆搜索
+
+按距离从近到远搜索，使用距离平方避免开方计算：
+
+```lua
+function FindNearestLandEdgeTile(start_x, start_y, max_radius)
+    local map = WorldSim
+    local start_tx, start_ty = map:GetTileCoordsAtPoint(start_x, 0, start_y)
+    local candidates = {}
+    
+    -- 收集所有陆地边缘 tile
+    for dx = -max_radius, max_radius do
+        for dy = -max_radius, max_radius do
+            local dist_sq = dx * dx + dy * dy
+            local tx, ty = start_tx + dx, start_ty + dy
+            local tile = map:GetTile(tx, ty)
+            
+            if TileGroupManager:IsLandTile(tile) and IsLandEdgeTile(map, tx, ty) then
+                table.insert(candidates, {tx = tx, ty = ty, dist_sq = dist_sq})
+            end
+        end
+    end
+    
+    -- 按距离排序，返回最近的
+    if #candidates > 0 then
+        table.sort(candidates, function(a, b) return a.dist_sq < b.dist_sq end)
+        local best = candidates[1]
+        local cx, _, cy = map:GetTileCenterPoint(best.tx, best.ty)
+        return cx, cy
+    end
+    
+    return nil, nil
+end
+```
+
+### 注意事项
+
+1. **坐标对齐约束**（重要）:
+   - **移动前后的 delta x 和 delta y 必须是 4 的倍数**（1 tile 的倍数）
+   - 因为 `TILE_SCALE = 4`，坐标必须是 tile 对齐的
+   - 这意味着：
+     - 原始坐标：`(rcx, rcy)` - 来自 `ReserveSpace` 返回
+     - 目标坐标：`(new_rcx, new_rcy)` - 找到的陆地边缘 tile 的中心点
+     - **约束**：`(new_rcx - rcx) % 4 == 0` 且 `(new_rcy - rcy) % 4 == 0`
+   - **实现方式**：
+     - 使用 `GetTileCenterPoint(tx, ty)` 获取 tile 中心点（已经是 tile 对齐的）
+     - 或者将坐标对齐到最近的 tile 边界：`aligned_x = math.floor(x / 4) * 4 + 2`（中心点）
+     - 确保最终坐标是 tile 对齐的，避免布局放置时出现偏移
+
+2. **世界生成阶段**:
+   - 在世界生成阶段，应使用 `WorldSim` 而不是 `TheWorld.Map`
+   - `WorldSim` 是 C++ 对象，需要通过 `WorldSim:GetTile(tx, ty)` 访问
+   - 需要确认 `WorldSim` 是否有 `GetTileCoordsAtPoint` 和 `GetTileCenterPoint` 方法
+
+3. **性能考虑**:
+   - 搜索范围 `max_radius` 需要合理设置（建议 10-20 tiles）
+   - 螺旋搜索比同心圆搜索更高效（找到第一个就返回）
+   - 如果找不到陆地边缘，可以回退到原始坐标或使用简单的偏移
+
+4. **边界检查**:
+   - 需要检查 tile 坐标是否在世界范围内
+   - 避免访问无效的 tile 坐标
+
+5. **坐标系统**:
+   - `ReserveSpace` 返回的坐标是**世界坐标**（左下角）
+   - 需要转换为 tile 坐标进行搜索
+   - 找到目标 tile 后，需要转换回世界坐标（使用 tile 中心点）
+   - **重要**：确保最终坐标是 tile 对齐的（4 的倍数）
+
+### 实现建议
+
+1. **创建新模块**: `scripts/land_edge_finder.lua`
+   - 封装 `FindNearestLandEdgeTile` 函数
+   - 封装 `IsLandEdgeTile` 函数
+   - 处理坐标转换
+
+2. **修改 `pigking_handler.lua`**:
+   - 将 `ProcessPosition` 中的简单偏移逻辑改为调用 `FindNearestLandEdgeTile`
+   - 如果找不到陆地边缘，可以回退到原始坐标或简单偏移
+
+3. **测试**:
+   - 测试不同地形情况（完全陆地、完全海洋、混合地形）
+   - 测试边界情况（找不到陆地边缘、超出搜索范围）
+
+---
+
