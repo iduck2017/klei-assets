@@ -1,0 +1,70 @@
+-- PigKing 布局处理模块
+
+local PigkingHandler = {}
+
+-- 判断是否是 DefaultPigking 布局（精确匹配，不区分大小写）
+function PigkingHandler.IsPigkingLayout(layout_name)
+    if not layout_name then
+        return false
+    end
+    local layout_name_lower = string.lower(layout_name)
+    return layout_name_lower == "defaultpigking"
+end
+
+-- 处理指定位置的 pigking 布局坐标修改
+-- 返回: new_rcx, new_rcy, modified_position
+function PigkingHandler.ProcessManualPosition(position, layout_name)
+    -- position 在调用此函数前已经检查过，不会是 nil
+    if not PigkingHandler.IsPigkingLayout(layout_name) then
+        return position[1], position[2], position
+    end
+    
+    local old_rcx, old_rcy = position[1], position[2]
+    local new_rcx = old_rcx + 8
+    local new_rcy = old_rcy + 8
+    
+    print(string.format(
+        "[Move Entity V2] ⚠️  检测到 DefaultPigking 布局: '%s'",
+        layout_name
+    ))
+    print(string.format(
+        "[Move Entity V2] 🔧 修改 pigking 布局坐标: 原坐标 (%.2f, %.2f) -> 新坐标 (%.2f, %.2f) [x+8, y+8]",
+        old_rcx, old_rcy, new_rcx, new_rcy
+    ))
+    
+    return new_rcx, new_rcy, {new_rcx, new_rcy}
+end
+
+-- 处理自动寻找位置的 pigking 布局坐标修改
+-- 返回: new_rcx, new_rcy, should_return_modified
+function PigkingHandler.ProcessAutoPosition(rcx, rcy, layout_name)
+    if not PigkingHandler.IsPigkingLayout(layout_name) then
+        return rcx, rcy, false
+    end
+    
+    local old_rcx, old_rcy = rcx, rcy
+    local new_rcx = old_rcx + 8
+    local new_rcy = old_rcy + 8
+    
+    print(string.format(
+        "[Move Entity V2] ⚠️  检测到 DefaultPigking 布局: '%s'",
+        layout_name
+    ))
+    print(string.format(
+        "[Move Entity V2] 🔧 修改 pigking 布局坐标: 原坐标 (%.2f, %.2f) -> 新坐标 (%.2f, %.2f) [x+8, y+8]",
+        old_rcx, old_rcy, new_rcx, new_rcy
+    ))
+    
+    return new_rcx, new_rcy, true
+end
+
+-- 获取 pigking 布局的标记信息（用于日志输出）
+function PigkingHandler.GetPigkingMarker(layout_name)
+    if PigkingHandler.IsPigkingLayout(layout_name) then
+        return "[Move Entity V2]   ⚠️  pigking 布局 - 坐标已偏移 (x+8, y+8)"
+    end
+    return nil
+end
+
+return PigkingHandler
+
