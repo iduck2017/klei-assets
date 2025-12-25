@@ -466,6 +466,43 @@ function LandEdgeFinder.ClearValidPositions()
     print("[Move Entity V2] [LandEdgeFinder] 已清空合法坐标集合")
 end
 
+-- 移除距离指定位置 < min_distance 的合法坐标（用于主要建筑之间最小距离限制）
+-- tile_x, tile_y: 已放置建筑的位置（tile 坐标）
+-- min_distance: 最小距离（tile 单位，默认 8）
+-- 返回: 移除的坐标数量
+function LandEdgeFinder.RemovePositionsNearby(tile_x, tile_y, min_distance)
+    min_distance = min_distance or 8
+    
+    if not tile_x or not tile_y then
+        print("[Move Entity V2] ⚠️  [LandEdgeFinder] RemovePositionsNearby: 无效的坐标参数")
+        return 0
+    end
+    
+    local removed_count = 0
+    
+    -- 从后往前遍历，避免删除时索引问题
+    for i = #VALID_POSITIONS, 1, -1 do
+        local pos = VALID_POSITIONS[i]
+        local dx = pos.tx - tile_x
+        local dy = pos.ty - tile_y
+        local dist = math.sqrt(dx * dx + dy * dy)
+        
+        if dist < min_distance then
+            table.remove(VALID_POSITIONS, i)
+            removed_count = removed_count + 1
+        end
+    end
+    
+    if removed_count > 0 then
+        print(string.format(
+            "[Move Entity V2] [LandEdgeFinder] 移除了 %d 个距离 tile (%d, %d) < %d tiles 的合法坐标（剩余 %d 个合法坐标）",
+            removed_count, tile_x, tile_y, min_distance, #VALID_POSITIONS
+        ))
+    end
+    
+    return removed_count
+end
+
 -- 获取合法坐标集合（返回副本，避免外部修改）
 function LandEdgeFinder.GetValidPositions()
     local result = {}

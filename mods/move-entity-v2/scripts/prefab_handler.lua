@@ -67,12 +67,15 @@ function PrefabHandler.ProcessPrefabPosition(prefab, tile_x, tile_y, width, heig
         -- 转换回 tile 坐标
         local new_tile_x, new_tile_y = WorldToTileCoords(new_world_x, new_world_y, width, height)
         
+        -- 移除距离该位置 < 8 tiles 的合法坐标（确保主要建筑之间最小距离 >= 8 tiles）
+        LandEdgeFinder.RemovePositionsNearby(new_tile_x, new_tile_y, 8)
+        
         print(string.format(
             "[Move Entity V2] ⚠️  检测到特殊 Prefab: '%s'",
             prefab
         ))
         print(string.format(
-            "[Move Entity V2] 🔧 修改 Prefab '%s' 坐标: tile (%d, %d) -> tile (%d, %d) [移动到合法位置，距离边缘 >= 6 tiles]",
+            "[Move Entity V2] 🔧 修改 Prefab '%s' 坐标: tile (%d, %d) -> tile (%d, %d) [移动到合法位置，距离边缘 >= 6 tiles，距离其他主要建筑 >= 8 tiles]",
             prefab, tile_x, tile_y, new_tile_x, new_tile_y
         ))
         

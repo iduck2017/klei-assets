@@ -91,23 +91,27 @@ function PigkingHandler.ProcessPosition(rcx_or_position, rcy_or_nil, layout_name
             
             -- 查找最近的合法坐标（返回世界坐标）
             local new_world_x, new_world_y, found = LandEdgeFinder.FindNearestValidPosition(old_world_x, old_world_y, world)
-            
+        
             if found then
                 -- 将世界坐标转换回 tile 坐标（ReserveAndPlaceLayout 的 position 需要 tile 坐标）
                 new_tx, new_ty = LandEdgeFinder.WorldToTileCoords(new_world_x, new_world_y, map_width, map_height)
                 found_valid = true
-                print(string.format(
-                    "[Move Entity V2] 🔧 修改布局 '%s' 坐标: tile (%d, %d) -> tile (%d, %d) [移动到合法位置，距离边缘 >= 6 tiles]",
+                
+                -- 移除距离该位置 < 8 tiles 的合法坐标（确保主要建筑之间最小距离 >= 8 tiles）
+                LandEdgeFinder.RemovePositionsNearby(new_tx, new_ty, 8)
+                
+            print(string.format(
+                    "[Move Entity V2] 🔧 修改布局 '%s' 坐标: tile (%d, %d) -> tile (%d, %d) [移动到合法位置，距离边缘 >= 6 tiles，距离其他主要建筑 >= 8 tiles]",
                     layout_name, old_tx, old_ty, new_tx, new_ty
-                ))
-            else
-                -- 未找到合法坐标，使用原始坐标
+            ))
+        else
+            -- 未找到合法坐标，使用原始坐标
                 new_tx = old_tx
                 new_ty = old_ty
-                print(string.format(
+            print(string.format(
                     "[Move Entity V2] ⚠️  未找到合法坐标，保持原始坐标: tile (%d, %d)",
                     old_tx, old_ty
-                ))
+            ))
             end
         end
     else

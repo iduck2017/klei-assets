@@ -1166,3 +1166,164 @@ rcy = rcy + size + 0.5
    - 确认 `WorldToTileCoords` 和 `TileToWorldCoords` 的转换是否正确
    - 验证转换后的坐标是否与 `ReserveSpace` 返回的格式一致
 
+---
+
+## 调研：地皮替换被多次调用且未清空 VALID_POSITIONS
+
+### 问题描述
+
+从日志中发现，两次"地皮替换完成"之间没有检测到世界生成并清空 `VALID_POSITIONS`：
+
+**日志证据**：
+```
+[00:01:59]: [Move Entity V2] [TurfReplacer] 地皮替换完成: 成功替换 20225 个, 跳过 5 个
+[00:01:59]: [Move Entity V2] [TurfReplacerHook] 地皮替换完成
+...
+[00:02:02]: [Move Entity V2] [TurfReplacer] 地皮替换完成: 成功替换 9605 个, 跳过 9887 个
+[00:02:02]: [Move Entity V2] [TurfReplacerHook] 地皮替换完成
+```
+
+两次地皮替换之间（从 00:01:59 到 00:02:02）：
+- ❌ 没有"检测到世界生成"日志
+- ❌ 没有"已清空合法坐标集合"日志
+- ❌ 没有"开始预计算合法坐标"日志
+
+**关键发现**：
+- 第一次替换：20225 个有效坐标
+- 第二次替换：19492 个有效坐标（减少了 733 个，可能是 `RemovePositionsNearby` 移除的）
+- 第二次替换时，`VALID_POSITIONS` 仍然包含之前的数据，没有重新计算
+
+### 可能的原因
+
+#### 原因 1: `GlobalPostPopulate` 被多次调用（最可能）
+
+**分析**：
+- 从源码 `src/map/forest_map.lua:887` 可以看到，`GlobalPostPopulate` 只被调用一次：`topology_save.root:GlobalPostPopulate(entities, map_width, map_height)`
+- 但是，`Graph:GlobalPostPopulate` 是一个实例方法，如果存在多个 Graph 节点（例如主世界和子世界），每个节点都可能调用自己的 `GlobalPostPopulate`
+- 我们的 Hook 检查了 `if self.parent == nil`，但这只能确保根节点执行，不能防止多个根节点的情况
+
+**验证方法**：
+- 在 Hook 中添加日志，记录 `self.id` 和 `self.parent`，确认是否有多个 Graph 节点调用了 `GlobalPostPopulate`
+- 检查是否有多个世界（例如主世界和洞穴世界）同时生成
+
+**解决方案**：
+- 使用全局变量标记是否已执行地皮替换，防止重复执行
+- 或者，在每次 `GlobalPostPopulate` 调用时，检查 `VALID_POSITIONS` 是否为空，如果为空则跳过
+
+#### 原因 2: 世界生成重试，但 `modworldgenmain.lua` 未被重新执行
+
+**分析**：
+- 如果世界生成失败并重试，理论上 `modworldgenmain.lua` 应该被重新执行
+- 但是，如果模块被 Lua 的 `require` 缓存，模块级变量可能不会被重置
+- `VALID_POSITIONS` 是 `land_edge_finder.lua` 中的模块级变量，如果模块被缓存，变量会保留之前的值
+
+**验证方法**：
+- 检查日志中是否有"检测到世界生成"的多次出现
+- 检查是否有"An error occured during world gen we will retry!" 的日志
+
+**解决方案**：
+- 在 `modworldgenmain.lua` 中直接调用 `ClearValidPositions()`，确保每次世界生成重试时都清空
+- 或者在 `GlobalPostPopulate` Hook 中，每次执行前都清空 `VALID_POSITIONS`
+
+#### 原因 3: Hook 被多次安装，导致多次执行
+
+**分析**：
+- `InstallTurfReplacerHook()` 在 `modworldgenmain.lua` 中被调用
+- 如果 `modworldgenmain.lua` 被多次执行，Hook 可能被多次安装
+- 每次安装 Hook 时，都会替换 `Graph.GlobalPostPopulate`，但之前的 Hook 可能已经被调用
+
+**验证方法**：
+- 检查日志中是否有多次"地皮替换 Hook 已安装"的消息
+- 检查 Hook 安装的时机
+
+**解决方案**：
+- 在安装 Hook 前检查是否已经安装过（使用全局变量标记）
+- 或者，使用闭包变量 `turf_replaced` 标记是否已执行（但需要确保每次世界生成重试时重置）
+
+### 推荐解决方案
+
+**方案 1: 使用全局变量标记 + 每次执行前清空（推荐）**
+
+```lua
+-- 在 turf_replacer_hook.lua 中
+local turf_replaced_this_generation = false
+
+Graph.GlobalPostPopulate = function(self, entities, width, height)
+    local result = original_GlobalPostPopulate(self, entities, width, height)
+    
+    if self.parent == nil and not turf_replaced_this_generation then
+        -- 每次执行前清空 VALID_POSITIONS，确保使用最新的数据
+        LandEdgeFinder.ClearValidPositions()
+        
+        -- 重新预计算（如果需要）
+        -- 或者，直接使用当前的 VALID_POSITIONS（如果已经计算过）
+        
+        local valid_count = LandEdgeFinder.GetValidPositionsCount()
+        if valid_count > 0 then
+            -- ... 执行地皮替换 ...
+            turf_replaced_this_generation = true
+        end
+    end
+    
+    return result
+end
+```
+
+**方案 2: 在 `modworldgenmain.lua` 中重置标记**
+
+```lua
+-- 在 modworldgenmain.lua 中
+print("[Move Entity V2] 🔄 检测到世界生成")
+
+-- 重置地皮替换标记
+_G.move_entity_v2_turf_replaced = false
+
+-- 清空 VALID_POSITIONS
+local LandEdgeFinder = require("land_edge_finder")
+LandEdgeFinder.ClearValidPositions()
+
+-- ... 其余代码 ...
+```
+
+**方案 3: 在每次 `GlobalPostPopulate` 调用时检查并清空**
+
+```lua
+Graph.GlobalPostPopulate = function(self, entities, width, height)
+    local result = original_GlobalPostPopulate(self, entities, width, height)
+    
+    if self.parent == nil then
+        -- 检查是否已经执行过（使用全局变量）
+        if not _G.move_entity_v2_turf_replaced then
+            -- 清空 VALID_POSITIONS，确保使用最新的数据
+            LandEdgeFinder.ClearValidPositions()
+            
+            -- 重新预计算（如果需要）
+            -- 或者，直接使用当前的 VALID_POSITIONS（如果已经计算过）
+            
+            local valid_count = LandEdgeFinder.GetValidPositionsCount()
+            if valid_count > 0 then
+                -- ... 执行地皮替换 ...
+                _G.move_entity_v2_turf_replaced = true
+            end
+        end
+    end
+    
+    return result
+end
+```
+
+### 待验证
+
+- [ ] 确认 `GlobalPostPopulate` 是否被多次调用
+- [ ] 确认是否有多个 Graph 节点（主世界和子世界）
+- [ ] 确认世界生成重试时 `modworldgenmain.lua` 是否被重新执行
+- [ ] 确认 Hook 是否被多次安装
+- [ ] 添加调试日志，记录每次 `GlobalPostPopulate` 调用的 `self.id` 和 `self.parent`
+
+### 相关文件
+
+- `src/map/forest_map.lua:887` - `GlobalPostPopulate` 的调用位置
+- `src/map/network.lua:770` - `Graph:GlobalPostPopulate` 的实现
+- `mods/move-entity-v2/scripts/turf_replacer_hook.lua` - 地皮替换 Hook
+- `mods/move-entity-v2/modworldgenmain.lua` - Mod 入口文件
+

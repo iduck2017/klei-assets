@@ -28,11 +28,9 @@ local function InstallLayoutHook()
     
     local LandEdgeFinder = require("land_edge_finder")
     
-    -- 每次 InstallLayoutHook 被调用时（包括世界生成重试），清空之前的合法坐标
-    -- 确保每次世界生成都重新计算 valid_pos
-    LandEdgeFinder.ClearValidPositions()
-    
-    local precomputed = false  -- 标记是否已经预计算
+    -- 注意：不再在这里清空 VALID_POSITIONS
+    -- 因为 modworldgenmain.lua 不会在重试时重新执行
+    -- 改为在 WorldSim:ResetAll() Hook 中清空，并在 Convert 中检查是否为空
     
     local original_Convert = obj_layout.Convert
     local original_ReserveAndPlaceLayout = obj_layout.ReserveAndPlaceLayout
@@ -57,9 +55,10 @@ local function InstallLayoutHook()
     end
     
     obj_layout.Convert = function(node_id, item, addEntity)
-        -- 在第一次调用时进行预计算（如果还没有计算过）
-        -- 注意：如果世界生成重试，需要重新计算，所以每次 InstallLayoutHook 都会重置 precomputed
-        if not precomputed then
+        -- 检查 VALID_POSITIONS 是否为空，如果为空则重新预计算
+        -- 不依赖 precomputed 局部变量，因为它在重试时不会重置
+        -- 当 WorldSim:ResetAll() 被调用时，VALID_POSITIONS 会被清空，这里会重新预计算
+        if LandEdgeFinder.GetValidPositionsCount() == 0 then
             local world = WorldSim
             if world then
                 local map_width, map_height = world:GetWorldSize()
@@ -67,7 +66,6 @@ local function InstallLayoutHook()
                     print("[Move Entity V2] [LayoutHook] 开始预计算合法坐标（距离边缘 >= 6 tiles）...")
                     local valid_count = LandEdgeFinder.PrecomputeValidPositions(world, 6)
                     if valid_count > 0 then
-                        precomputed = true
                         print(string.format("[Move Entity V2] [LayoutHook] 预计算完成，找到 %d 个合法坐标", valid_count))
                     else
                         print("[Move Entity V2] ⚠️  预计算未找到合法坐标，将使用原始坐标")

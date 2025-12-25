@@ -1,4 +1,5 @@
-print("[Move Entity V2] 🔄 检测到世界生成")
+local InstallWorldResetHook = require("world_reset_hook")
+InstallWorldResetHook()
 
 local InstallLayoutHook = require("layout_hook")
 InstallLayoutHook()

@@ -2086,3 +2086,793 @@ end
 
 ---
 
+## 调研：主要建筑之间最小距离限制
+
+### 需求描述
+
+将 `SPECIAL_LAYOUTS` 和 `SPECIAL_PREFABS` 统称为"主要建筑"，要求主要建筑彼此之间的距离不能小于 8 tiles。
+
+**主要建筑列表**:
+- **SPECIAL_LAYOUTS**: `DefaultPigking`, `DragonflyArena`, `MoonbaseOne`, `Charlie1`, `Charlie2`, `Oasis`, `junk_yard`
+- **SPECIAL_PREFABS**: `multiplayer_portal`, `beequeenhive`
+
+### 问题分析
+
+当前实现中，每个主要建筑在放置时只考虑了：
+1. 距离边缘 >= 6 tiles（通过 `PrecomputeValidPositions` 和 `FindNearestValidPosition`）
+2. 没有考虑与其他已放置的主要建筑之间的距离
+
+这可能导致：
+- 多个主要建筑被放置在相近的位置（距离 < 8 tiles）
+- 新放置的主要建筑可能靠近已放置的主要建筑
+
+### 实现方案
+
+#### 方案 1: 维护已放置建筑列表 + 实时距离检查 ⭐ **推荐**
+
+**思路**:
+1. 创建一个全局的已放置主要建筑位置列表 `PLACED_MAJOR_BUILDINGS`
+2. 在 `PigkingHandler.ProcessPosition` 和 `PrefabHandler.ProcessPrefabPosition` 中：
+   - 查找合法位置时，检查候选位置与所有已放置建筑的距离 >= 8 tiles
+   - 找到合法位置后，将新建筑的位置添加到 `PLACED_MAJOR_BUILDINGS`
+3. 在 `FindNearestValidPosition` 中增加距离检查逻辑
+
+**优点**:
+- 逻辑清晰，易于理解和维护
+- 可以灵活处理放置顺序
+- 不需要修改预计算逻辑
+- 可以记录每个建筑的类型和名称，便于调试
+
+**缺点**:
+- 每次查找都需要遍历所有已放置的建筑，如果建筑数量多可能影响性能
+- 需要确保在查找时能访问到已放置建筑列表
+
+**实现步骤**:
+1. 在 `land_edge_finder.lua` 中：
+   - 添加 `PLACED_MAJOR_BUILDINGS` 全局列表
+   - 添加 `AddPlacedBuilding(type, name, tile_x, tile_y, world_x, world_y)` 函数
+   - 添加 `ClearPlacedBuildings()` 函数（用于世界生成重试时清空）
+   - 修改 `FindNearestValidPosition`，增加与已放置建筑的距离检查
+2. 在 `pigking_handler.lua` 中：
+   - 在 `ProcessPosition` 找到合法位置后，调用 `AddPlacedBuilding("layout", layout_name, new_tx, new_ty, new_world_x, new_world_y)`
+3. 在 `prefab_handler.lua` 中：
+   - 在 `ProcessPrefabPosition` 找到合法位置后，调用 `AddPlacedBuilding("prefab", prefab, new_tile_x, new_tile_y, new_world_x, new_world_y)`
+4. 在 `layout_hook.lua` 中：
+   - 在 `InstallLayoutHook` 开始时调用 `ClearPlacedBuildings()`（确保每次世界生成重试时清空）
+
+#### 方案 2: 动态更新合法坐标集合
+
+**思路**:
+1. 在预计算时，只考虑距离边缘 >= 6 tiles 的坐标
+2. 当放置一个主要建筑后，从 `VALID_POSITIONS` 中移除距离该位置 < 8 tiles 的坐标
+3. 后续查找时，自动排除这些已被占用的区域
+
+**优点**:
+- 性能好，不需要在每次查找时重新计算
+- 逻辑清晰，逐步缩小可用区域
+
+**缺点**:
+- 如果放置顺序不当，可能导致后续建筑找不到合法位置
+- 需要确保在放置后立即更新 `VALID_POSITIONS`
+
+**实现步骤**:
+1. 在 `LandEdgeFinder` 中添加 `RemovePositionsNearby(tile_x, tile_y, min_distance)` 函数
+2. 在 `PigkingHandler.ProcessPosition` 中，放置 layout 后调用该函数（min_distance = 8）
+3. 在 `PrefabHandler.ProcessPrefabPosition` 中，放置 prefab 后调用该函数（min_distance = 8）
+
+#### 方案 3: 混合方案
+
+**思路**:
+1. 预计算时只考虑距离边缘 >= 6 tiles
+2. 在查找时，实时检查：
+   - 距离边缘 >= 6 tiles
+   - 距离所有已放置的主要建筑 >= 8 tiles
+3. 如果找到合法位置，放置后更新 `VALID_POSITIONS`（移除附近坐标）
+
+**优点**:
+- 结合两种方案的优点
+- 性能较好，逻辑清晰
+
+**缺点**:
+- 实现稍复杂
+
+### 距离计算
+
+**Tile 坐标距离（欧几里得距离）**:
+```lua
+local function TileDistance(tile_x1, tile_y1, tile_x2, tile_y2)
+    local dx = tile_x1 - tile_x2
+    local dy = tile_y1 - tile_y2
+    return math.sqrt(dx * dx + dy * dy)
+end
+```
+
+**世界坐标距离（转换为 tile 单位）**:
+```lua
+local TILE_SCALE = 4
+local function WorldDistance(world_x1, world_y1, world_x2, world_y2)
+    local dx = world_x1 - world_x2
+    local dy = world_y1 - world_y2
+    return math.sqrt(dx * dx + dy * dy) / TILE_SCALE  -- 转换为 tile 单位
+end
+```
+
+**注意**: 由于主要建筑可能使用不同的坐标系统（layout 使用 tile 坐标，prefab 使用 tile 坐标），建议统一使用 tile 坐标进行距离计算。
+
+### 已放置建筑位置记录
+
+需要记录的信息：
+- 建筑类型（"layout" 或 "prefab"）
+- 建筑名称（用于日志和调试）
+- 最终放置的 tile 坐标 (tile_x, tile_y)
+- 对应的世界坐标 (world_x, world_y)（可选，用于调试）
+
+**数据结构**:
+```lua
+local PLACED_MAJOR_BUILDINGS = {
+    {
+        type = "layout",  -- 或 "prefab"
+        name = "DefaultPigking",
+        tile_x = 276,
+        tile_y = 270,
+        world_x = 254.00,  -- 可选
+        world_y = 230.00   -- 可选
+    },
+    {
+        type = "prefab",
+        name = "multiplayer_portal",
+        tile_x = 200,
+        tile_y = 250,
+        world_x = 100.00,
+        world_y = 200.00
+    },
+    -- ...
+}
+```
+
+### 查找逻辑修改
+
+在 `FindNearestValidPosition` 中，需要增加对已放置建筑的距离检查：
+
+```lua
+function LandEdgeFinder.FindNearestValidPosition(world_x, world_y, world, max_radius)
+    -- ... 现有逻辑 ...
+    
+    -- 将世界坐标转换为 tile 坐标
+    local start_tx, start_ty = WorldToTileCoords(world_x, world_y, map_width, map_height)
+    
+    -- 螺旋搜索：从内到外，逐层搜索
+    for radius = 0, max_radius do
+        for dx = -radius, radius do
+            for dy = -radius, radius do
+                if math.abs(dx) == radius or math.abs(dy) == radius then
+                    local tx, ty = start_tx + dx, start_ty + dy
+                    
+                    -- 边界检查
+                    if tx >= 0 and tx < map_width and ty >= 0 and ty < map_height then
+                        -- 检查是否是合法位置（距离边缘 >= 6 tiles）
+                        local tile = world:GetTile(tx, ty)
+                        if tile and tile ~= 1 and TileGroupManager:IsLandTile(tile) and not TileGroupManager:IsOceanTile(tile) then
+                            local dist_to_edge = DistanceToEdge(tx, ty, world, 20, 0)
+                            
+                            if dist_to_edge >= 6 then
+                                -- 检查距离所有已放置的主要建筑 >= 8 tiles
+                                local too_close = false
+                                for _, building in ipairs(PLACED_MAJOR_BUILDINGS) do
+                                    local dist = TileDistance(tx, ty, building.tile_x, building.tile_y)
+                                    if dist < 8 then
+                                        too_close = true
+                                        break
+                                    end
+                                end
+                                
+                                if not too_close then
+                                    -- 找到合法位置
+                                    local new_world_x, new_world_y = TileToWorldCoords(tx, ty, map_width, map_height)
+                                    return new_world_x, new_world_y, true
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    return world_x, world_y, false
+end
+```
+
+### 放置顺序考虑
+
+**问题**: 如果多个主要建筑需要移动，放置顺序可能影响结果。
+
+**分析**:
+- Layout 和 Prefab 的放置顺序由游戏世界生成流程决定
+- Layout 通过 `obj_layout.Convert` Hook 处理，Prefab 通过 `PopulateWorld_AddEntity` Hook 处理
+- 需要确认这两个 Hook 的执行顺序
+
+**建议**:
+- 如果某个建筑找不到满足距离要求的位置（距离边缘 >= 6 且距离其他建筑 >= 8），可以：
+  1. 使用原始坐标（不移动）
+  2. 放宽距离要求（例如只检查距离边缘 >= 6，不检查与其他建筑的距离）
+  3. 记录警告日志，提示用户
+
+### 坐标系统统一
+
+**当前情况**:
+- Layout 使用 tile 坐标（`ReserveSpace` 返回 tile 坐标，`ReserveAndPlaceLayout` 的 `position` 参数需要 tile 坐标）
+- Prefab 使用 tile 坐标（`PopulateWorld_AddEntity` 的参数是 tile 坐标）
+
+**建议**:
+- 统一使用 tile 坐标进行距离计算和存储
+- 在需要时转换为世界坐标（例如用于日志输出）
+
+### 性能考虑
+
+1. **已放置建筑数量**: 如果主要建筑数量不多（< 10），实时距离检查的性能影响可以忽略
+2. **查找范围**: `FindNearestValidPosition` 使用螺旋搜索，最大半径 20 tiles，如果已放置建筑较多，可能需要优化
+3. **优化建议**:
+   - 如果已放置建筑数量 > 20，可以考虑使用空间索引（如网格索引）来加速距离检查
+   - 或者限制搜索范围，只检查已放置建筑附近的区域
+
+### 实现建议
+
+**推荐使用方案 1（维护已放置建筑列表 + 实时距离检查）**:
+
+1. **在 `land_edge_finder.lua` 中添加**:
+   ```lua
+   -- 已放置的主要建筑列表
+   local PLACED_MAJOR_BUILDINGS = {}
+   
+   -- 添加已放置的建筑
+   function LandEdgeFinder.AddPlacedBuilding(type, name, tile_x, tile_y, world_x, world_y)
+       table.insert(PLACED_MAJOR_BUILDINGS, {
+           type = type,
+           name = name,
+           tile_x = tile_x,
+           tile_y = tile_y,
+           world_x = world_x,
+           world_y = world_y
+       })
+       print(string.format(
+           "[Move Entity V2] [LandEdgeFinder] 已记录主要建筑: %s '%s' at tile (%d, %d)",
+           type, name, tile_x, tile_y
+       ))
+   end
+   
+   -- 清空已放置建筑列表（用于世界生成重试）
+   function LandEdgeFinder.ClearPlacedBuildings()
+       PLACED_MAJOR_BUILDINGS = {}
+       print("[Move Entity V2] [LandEdgeFinder] 已清空已放置建筑列表")
+   end
+   
+   -- 获取已放置建筑数量
+   function LandEdgeFinder.GetPlacedBuildingsCount()
+       return #PLACED_MAJOR_BUILDINGS
+   end
+   ```
+
+2. **修改 `FindNearestValidPosition`**: 增加与已放置建筑的距离检查（见上面的代码示例）
+
+3. **在 `pigking_handler.lua` 中调用**:
+   ```lua
+   if found_valid then
+       -- 将世界坐标转换回 tile 坐标
+       new_tx, new_ty = LandEdgeFinder.WorldToTileCoords(new_world_x, new_world_y, map_width, map_height)
+       
+       -- 记录已放置的建筑
+       LandEdgeFinder.AddPlacedBuilding("layout", layout_name, new_tx, new_ty, new_world_x, new_world_y)
+       
+       found_valid = true
+       -- ... 其余代码 ...
+   end
+   ```
+
+4. **在 `prefab_handler.lua` 中调用**:
+   ```lua
+   if found_valid then
+       -- 转换回 tile 坐标
+       local new_tile_x, new_tile_y = WorldToTileCoords(new_world_x, new_world_y, width, height)
+       
+       -- 记录已放置的建筑
+       LandEdgeFinder.AddPlacedBuilding("prefab", prefab, new_tile_x, new_tile_y, new_world_x, new_world_y)
+       
+       -- ... 其余代码 ...
+   end
+   ```
+
+5. **在 `layout_hook.lua` 中调用**:
+   ```lua
+   local function InstallLayoutHook()
+       -- ... 现有代码 ...
+       
+       local LandEdgeFinder = require("land_edge_finder")
+       LandEdgeFinder.ClearValidPositions()  -- 现有代码
+       LandEdgeFinder.ClearPlacedBuildings()  -- 新增：清空已放置建筑列表
+       
+       -- ... 其余代码 ...
+   end
+   ```
+
+### 注意事项
+
+1. **世界生成重试**: 确保在每次世界生成重试时清空 `PLACED_MAJOR_BUILDINGS`（在 `InstallLayoutHook` 开始时调用 `ClearPlacedBuildings()`）
+
+2. **找不到合法位置**: 如果某个建筑找不到满足距离要求的位置，应该：
+   - 记录警告日志
+   - 使用原始坐标（不移动）或只满足距离边缘 >= 6 的位置
+
+3. **距离计算精度**: 使用欧几里得距离（`sqrt(dx² + dy²)`），确保距离计算准确
+
+4. **边界情况**: 如果地图较小或主要建筑数量较多，可能无法满足所有距离要求，需要处理这种情况
+
+5. **调试支持**: 添加详细的日志输出，记录每个建筑的放置位置和与其他建筑的距离
+
+### 待实现
+
+- [ ] 在 `LandEdgeFinder` 中添加 `PLACED_MAJOR_BUILDINGS` 列表和相关函数
+- [ ] 修改 `FindNearestValidPosition`，增加与已放置建筑的距离检查
+- [ ] 在 `PigkingHandler.ProcessPosition` 中调用 `AddPlacedBuilding`
+- [ ] 在 `PrefabHandler.ProcessPrefabPosition` 中调用 `AddPlacedBuilding`
+- [ ] 在 `InstallLayoutHook` 中调用 `ClearPlacedBuildings`
+- [ ] 添加日志记录，显示每个建筑的放置位置和与其他建筑的距离
+- [ ] 测试多个主要建筑的放置顺序和距离检查
+
+---
+
+## 调研：主世界和子世界（Shard）系统
+
+### 需求描述
+
+了解 Don't Starve Together 中的主世界和子世界（Shard）系统，以便理解为什么 `GlobalPostPopulate` 可能被多次调用。
+
+### 关键发现
+
+#### 1. Shard 系统概述
+
+**Shard（分片）** 是 Don't Starve Together 中的多世界系统，允许服务器同时运行多个独立的世界：
+
+- **主世界（Master Shard）**: 通常是地面世界（`location = "forest"`）
+- **子世界（Secondary Shard）**: 通常是洞穴世界（`location = "cave"`）
+
+**相关代码** (`src/prefabs/world.lua:426`):
+```lua
+inst.ismastersim = TheNet:GetIsMasterSimulation()
+inst.ismastershard = inst.ismastersim and not TheShard:IsSecondary()
+```
+
+#### 2. 世界类型（Location）
+
+**主要世界类型** (`src/map/locations.lua`):
+- `"forest"`: 地面世界（主世界）
+- `"cave"`: 洞穴世界（子世界）
+- `"lavaarena"`: 熔岩竞技场
+- `"quagmire"`: 沼泽
+
+**世界生成流程** (`src/worldgen_main.lua:387-392`):
+```lua
+local level = Level(world_gen_data.level_data)
+local prefab = level.location  -- "forest" 或 "cave"
+savedata = forest_map.Generate(prefab, max_map_width, max_map_height, choose_tasks, level, world_gen_data.level_type)
+```
+
+#### 3. 多世界生成机制
+
+**世界生成顺序**:
+1. 主世界（forest）先生成
+2. 子世界（cave）后生成（如果启用）
+3. 每个世界都有独立的 `WorldSim` 实例
+4. 每个世界都有独立的 `Graph` 实例和 `topology_save.root`
+
+**相关代码** (`src/map/forest_map.lua:887`):
+```lua
+topology_save.root:GlobalPostPopulate(entities, map_width, map_height)
+```
+
+**关键发现**:
+- 每个世界（主世界和子世界）都会调用自己的 `GlobalPostPopulate`
+- 每个世界都有独立的 `Graph` 实例，`self.parent == nil` 对于每个世界的根节点都成立
+- 因此，如果服务器启用了洞穴，`GlobalPostPopulate` 会被调用两次：
+  1. 主世界（forest）生成完成后
+  2. 洞穴世界（cave）生成完成后
+
+#### 4. Shard 连接机制
+
+**Shard 网络** (`src/shardnetworking.lua`):
+- `Shard_GetConnectedShards()`: 获取所有连接的 shard
+- `TheShard:IsMaster()`: 检查是否是主 shard
+- `TheShard:IsSecondary()`: 检查是否是次 shard
+
+**世界数据同步** (`src/networking.lua:788-794`):
+```lua
+if TheShard:IsMaster() then
+    -- Merge secondary shard worldgen data
+    for k, v in pairs(Shard_GetConnectedShards()) do
+        if v.world ~= nil and v.world[1] ~= nil then
+            table.insert(clusteroptions, v.world[1])
+        end
+    end
+end
+```
+
+#### 5. Mod 世界生成入口
+
+**`modworldgenmain.lua` 的执行时机**:
+- 每个世界生成时，`modworldgenmain.lua` 都会被重新执行
+- 主世界生成时执行一次
+- 洞穴世界生成时再执行一次（如果启用）
+
+**相关代码** (`src/mods.lua:577`):
+```lua
+self:InitializeModMain(modname, mod, "modworldgenmain.lua")
+```
+
+### 对地皮替换的影响
+
+**问题**:
+- 如果服务器启用了洞穴，`GlobalPostPopulate` 会被调用两次：
+  1. 主世界生成完成后 → 地皮替换执行
+  2. 洞穴世界生成完成后 → 地皮替换再次执行（使用主世界的 `VALID_POSITIONS`）
+
+**原因**:
+- `VALID_POSITIONS` 是模块级变量，在主世界生成时被计算
+- 洞穴世界生成时，`VALID_POSITIONS` 仍然包含主世界的数据
+- 洞穴世界调用 `GlobalPostPopulate` 时，使用了主世界的 `VALID_POSITIONS`，导致地皮替换在错误的世界执行
+
+**解决方案**:
+1. **检查世界类型**: 在 `GlobalPostPopulate` Hook 中检查当前世界类型，只对主世界（forest）执行地皮替换
+2. **使用全局标记**: 使用全局变量标记是否已执行地皮替换，防止重复执行
+3. **每次执行前清空**: 在每次 `GlobalPostPopulate` 执行前清空 `VALID_POSITIONS`，确保使用正确的世界数据
+
+### 验证方法
+
+**添加调试日志**:
+```lua
+Graph.GlobalPostPopulate = function(self, entities, width, height)
+    local result = original_GlobalPostPopulate(self, entities, width, height)
+    
+    if self.parent == nil then
+        -- 检查当前世界类型
+        local world_prefab = WorldSim and WorldSim:GetWorldPrefab() or "unknown"
+        print(string.format(
+            "[Move Entity V2] [TurfReplacerHook] GlobalPostPopulate called: world_prefab = %s, self.id = %s",
+            world_prefab, tostring(self.id)
+        ))
+        
+        -- 只对主世界（forest）执行地皮替换
+        if world_prefab == "forest" then
+            -- ... 执行地皮替换 ...
+        end
+    end
+    
+    return result
+end
+```
+
+### 相关文件
+
+- `src/map/locations.lua` - 世界类型定义
+- `src/map/forest_map.lua:887` - `GlobalPostPopulate` 调用位置
+- `src/map/network.lua:770` - `Graph:GlobalPostPopulate` 实现
+- `src/prefabs/world.lua:426` - Shard 判断逻辑
+- `src/shardnetworking.lua` - Shard 网络管理
+- `src/mods.lua:577` - Mod 世界生成入口
+
+### 待实现
+
+- [ ] 在 `GlobalPostPopulate` Hook 中添加世界类型检查
+- [ ] 只对主世界（forest）执行地皮替换
+- [ ] 添加调试日志，记录每次 `GlobalPostPopulate` 调用的世界类型
+- [ ] 测试启用洞穴时的地皮替换行为
+
+---
+
+## 调研：世界生成重试时 modworldgenmain.lua 的执行情况
+
+### 需求描述
+
+确认每次世界生成重试时，`modworldgenmain.lua` 是否会被重新执行。
+
+### 源码分析
+
+#### 1. 世界生成重试机制
+
+**重试循环** (`src/worldgen_main.lua:418-439`):
+```lua
+local try = 1
+local maxtries = 5
+
+while savedata == nil do
+    savedata = forest_map.Generate(prefab, max_map_width, max_map_height, choose_tasks, level, world_gen_data.level_type)
+    
+    if savedata == nil then
+        if try >= maxtries then
+            print("An error occured during world and we give up! [was ",try," of ",maxtries,"]")
+            return nil
+        else
+            print("An error occured during world gen we will retry! [was ",try," of ",maxtries,"]")
+        end
+        try = try + 1
+        collectgarbage("collect")
+        WorldSim:ResetAll()  -- 重置世界状态
+    elseif GEN_PARAMETERS == "" or world_gen_data.show_debug == true then
+        ShowDebug(savedata)
+    end
+end
+```
+
+**关键发现**:
+- 重试循环在 `GenerateNew` 函数内部
+- 每次重试时调用 `WorldSim:ResetAll()` 重置世界状态
+- 但**没有重新调用** `ModManager:LoadMods(true)`
+
+#### 2. Mod 加载时机
+
+**Mod 加载** (`src/worldgen_main.lua:144-148`):
+```lua
+local moddata = json.decode(GEN_MODDATA)
+if moddata then
+    KnownModIndex:RestoreCachedSaveData(moddata.index)
+    ModManager:LoadMods(true)  -- 只在这里调用一次
+end
+```
+
+**关键发现**:
+- `ModManager:LoadMods(true)` 只在 `worldgen_main.lua` 文件开始处调用一次
+- 调用位置在 `GenerateNew` 函数**之前**
+- 重试循环在 `GenerateNew` 函数**内部**，因此不会重新调用 `LoadMods`
+
+#### 3. modworldgenmain.lua 的执行流程
+
+**Mod 初始化** (`src/mods.lua:577-583`):
+```lua
+for i,mod in ipairs(self.mods) do
+    -- ... 设置 package.path 等 ...
+    
+    self.currentlyloadingmod = mod.modname
+    self:InitializeModMain(mod.modname, mod, "modworldgenmain.lua")
+    -- ...
+end
+```
+
+**InitializeModMain 实现** (`src/mods.lua:587-618`):
+```lua
+function ModWrangler:InitializeModMain(modname, env, mainfile, safe)
+    -- ...
+    local fn = kleiloadlua(MODS_ROOT..modname.."/"..mainfile)  -- 加载文件
+    -- ...
+    if safe then
+        status, r = RunInEnvironmentSafe(fn,env)  -- 执行函数
+    else
+        status, r = RunInEnvironment(fn,env)  -- 执行函数
+    end
+    -- ...
+end
+```
+
+**关键发现**:
+- `kleiloadlua` 加载文件并返回函数
+- `RunInEnvironment` 执行该函数
+- 但是，`kleiloadlua` 可能使用缓存，不会每次都重新加载文件
+- 即使重新加载，`RunInEnvironment` 也只是执行函数，**不会重新执行模块级的代码**（如 `print` 语句）
+
+### 结论
+
+**`modworldgenmain.lua` 只会在世界生成开始前加载和执行一次，不会在每次重试时重新执行。**
+
+**原因**:
+1. `ModManager:LoadMods(true)` 只在 `worldgen_main.lua` 开始时调用一次
+2. 重试循环在 `GenerateNew` 函数内部，不会重新调用 `LoadMods`
+3. 即使 `kleiloadlua` 重新加载文件，模块级的代码（如 `print` 语句）也不会重新执行
+
+**影响**:
+- 模块级变量（如 `VALID_POSITIONS`）在重试时不会被重置
+- 模块级的 `print` 语句（如 `print("[Move Entity V2] 🔄 检测到世界生成")`）不会在重试时重新执行
+- Hook 安装代码（如 `InstallLayoutHook()`）不会在重试时重新执行
+
+### 解决方案
+
+#### 方案 1: Hook `WorldSim:ResetAll()` + 修改 `layout_hook.lua` 中的预计算逻辑 ⭐ **推荐**
+
+**思路**:
+1. Hook `WorldSim:ResetAll()` 来检测世界生成重试，清空 `VALID_POSITIONS` 并重置 `precomputed` 标记
+2. 修改 `layout_hook.lua` 中的预计算逻辑：
+   - 不依赖 `precomputed` 局部变量（因为它在重试时不会重置）
+   - 改为检查 `VALID_POSITIONS` 是否为空，如果为空则重新预计算
+   - 这样即使重试时 `precomputed` 仍然是 `true`，也能重新预计算
+
+**优点**:
+- 准确检测世界生成重试
+- 确保每次使用正确的世界数据
+- 不需要修改 `GlobalPostPopulate` 的逻辑
+- 预计算逻辑更健壮
+
+**实现步骤**:
+
+1. **在 `modworldgenmain.lua` 中 Hook `WorldSim:ResetAll()`**:
+```lua
+-- modworldgenmain.lua
+print("[Move Entity V2] 🔄 检测到世界生成")
+
+-- Hook WorldSim:ResetAll() 来检测世界生成重试
+local LandEdgeFinder = require("land_edge_finder")
+local original_ResetAll = WorldSim.ResetAll
+WorldSim.ResetAll = function(self, ...)
+    -- 清空 VALID_POSITIONS，准备重新计算
+    LandEdgeFinder.ClearValidPositions()
+    print("[Move Entity V2] 🔄 检测到世界生成重试，已清空 VALID_POSITIONS")
+    
+    -- 重置地皮替换标记
+    _G.move_entity_v2_turf_replaced = false
+    
+    return original_ResetAll(self, ...)
+end
+
+-- ... 其余代码 ...
+```
+
+2. **修改 `layout_hook.lua` 中的预计算逻辑**:
+```lua
+-- layout_hook.lua
+obj_layout.Convert = function(node_id, item, addEntity)
+    -- 检查 VALID_POSITIONS 是否为空，如果为空则重新预计算
+    -- 不依赖 precomputed 局部变量，因为它在重试时不会重置
+    if LandEdgeFinder.GetValidPositionsCount() == 0 then
+        local world = WorldSim
+        if world then
+            local map_width, map_height = world:GetWorldSize()
+            if map_width and map_height then
+                print("[Move Entity V2] [LayoutHook] 开始预计算合法坐标（距离边缘 >= 6 tiles）...")
+                local valid_count = LandEdgeFinder.PrecomputeValidPositions(world, 6)
+                if valid_count > 0 then
+                    print(string.format("[Move Entity V2] [LayoutHook] 预计算完成，找到 %d 个合法坐标", valid_count))
+                else
+                    print("[Move Entity V2] ⚠️  预计算未找到合法坐标，将使用原始坐标")
+                end
+            else
+                print("[Move Entity V2] ⚠️  无法获取地图尺寸，跳过预计算")
+            end
+        end
+    end
+    
+    -- ... 其余代码 ...
+end
+```
+
+#### 方案 2: 在 `GlobalPostPopulate` 中检查并清空（简化版）
+
+**思路**:
+- 在每次 `GlobalPostPopulate` 执行时：
+  1. 检查世界类型，只对主世界执行
+  2. 清空 `VALID_POSITIONS` 并重新预计算
+  3. 使用全局标记防止重复执行
+
+**优点**:
+- 实现简单
+- 不需要 Hook `WorldSim:ResetAll()`
+
+**缺点**:
+- 每次 `GlobalPostPopulate` 都会重新预计算，性能稍差
+- 需要准确判断世界类型
+
+**实现代码**:
+```lua
+-- turf_replacer_hook.lua
+Graph.GlobalPostPopulate = function(self, entities, width, height)
+    local result = original_GlobalPostPopulate(self, entities, width, height)
+    
+    if self.parent == nil and not (_G.move_entity_v2_turf_replaced) then
+        -- 检查世界类型（简化：通过检查是否有海洋）
+        local is_forest = false
+        if WorldSim then
+            local map_width, map_height = WorldSim:GetWorldSize()
+            if map_width and map_height then
+                -- 检查是否有海洋 tile（主世界有，洞穴没有）
+                for x = 0, math.min(20, map_width - 1) do
+                    for y = 0, math.min(20, map_height - 1) do
+                        local tile = WorldSim:GetTile(x, y)
+                        if tile and TileGroupManager:IsOceanTile(tile) then
+                            is_forest = true
+                            break
+                        end
+                    end
+                    if is_forest then break end
+                end
+            end
+        end
+        
+        if is_forest then
+            -- 清空并重新预计算
+            LandEdgeFinder.ClearValidPositions()
+            LandEdgeFinder.PrecomputeValidPositions(WorldSim, 6)
+            
+            -- 执行地皮替换
+            local valid_positions = LandEdgeFinder.GetValidPositions()
+            if valid_positions and #valid_positions > 0 then
+                TurfReplacer.ReplaceValidPositionsWithWoodFloor(WorldSim, valid_positions)
+                _G.move_entity_v2_turf_replaced = true
+            end
+        end
+    end
+    
+    return result
+end
+```
+
+#### 方案 3: 使用 `obj_layout.Convert` 中的预计算时机
+
+**思路**:
+- 在 `obj_layout.Convert` Hook 中，每次预计算时检查是否是新的世界生成
+- 使用全局变量记录上次预计算的世界 ID 或时间戳
+- 如果检测到新的世界生成，清空 `VALID_POSITIONS`
+
+**优点**:
+- 利用现有的预计算机制
+- 不需要额外的 Hook
+
+**缺点**:
+- 需要准确判断是否是新的世界生成
+- 实现较复杂
+
+#### 方案 4: 在 `layout_hook.lua` 中检测重试
+
+**思路**:
+- 在 `InstallLayoutHook` 中，使用全局变量记录调用次数
+- 每次调用时检查是否是新的世界生成尝试
+- 如果是，清空 `VALID_POSITIONS`
+
+**实现代码**:
+```lua
+-- layout_hook.lua
+local function InstallLayoutHook()
+    -- 使用全局变量记录世界生成尝试次数
+    _G.move_entity_v2_world_gen_attempt = (_G.move_entity_v2_world_gen_attempt or 0) + 1
+    local attempt = _G.move_entity_v2_world_gen_attempt
+    
+    if attempt > 1 then
+        print(string.format(
+            "[Move Entity V2] 🔄 检测到世界生成重试: 第 %d 次尝试",
+            attempt
+        ))
+    end
+    
+    local LandEdgeFinder = require("land_edge_finder")
+    LandEdgeFinder.ClearValidPositions()  -- 每次调用都清空
+    
+    -- ... 其余代码 ...
+end
+```
+
+### 推荐实现
+
+**推荐使用方案 1（Hook `WorldSim:ResetAll()` + 在 `GlobalPostPopulate` 中检查世界类型）**:
+
+**理由**:
+1. **准确检测重试**: `WorldSim:ResetAll()` 在世界生成重试时会被调用，可以准确检测
+2. **确保数据正确**: 通过检查 `VALID_POSITIONS` 是否为空来决定是否重新预计算，确保使用正确的世界数据
+3. **逻辑更健壮**: 不依赖局部变量 `precomputed`，而是直接检查 `VALID_POSITIONS` 的状态
+
+**实现要点**:
+1. Hook `WorldSim:ResetAll()` 来清空 `VALID_POSITIONS` 和重置标记
+2. 修改 `layout_hook.lua` 中的预计算逻辑，改为检查 `VALID_POSITIONS` 是否为空
+3. 如果为空则重新预计算，确保使用当前世界的数据
+4. 使用全局变量 `_G.move_entity_v2_turf_replaced` 防止地皮替换重复执行
+
+### 待实现
+
+- [ ] Hook `WorldSim:ResetAll()` 来检测重试并清空状态
+- [ ] 修改 `layout_hook.lua` 中的预计算逻辑，改为检查 `VALID_POSITIONS` 是否为空
+- [ ] 如果 `VALID_POSITIONS` 为空则重新预计算（使用当前世界的数据）
+- [ ] 使用全局变量标记防止地皮替换重复执行
+- [ ] 添加调试日志，记录每次调用的状态
+
+### 相关文件
+
+- `src/worldgen_main.lua:147` - `ModManager:LoadMods(true)` 调用位置
+- `src/worldgen_main.lua:421-439` - 世界生成重试循环
+- `src/mods.lua:577` - `modworldgenmain.lua` 的加载
+- `src/mods.lua:587-618` - `InitializeModMain` 实现
+
+---
+
