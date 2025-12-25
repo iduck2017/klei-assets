@@ -67,8 +67,9 @@ function PigkingHandler.ProcessPosition(rcx_or_position, rcy_or_nil, layout_name
     end
     
     -- 修改坐标：查找最近的合法坐标（距离边缘 >= 6 tiles）
-    local old_rcx, old_rcy = rcx, rcy
-    local new_rcx, new_rcy
+    -- 注意：rcx, rcy 是 tile 坐标（从 ReserveSpace 返回）
+    local old_tx, old_ty = rcx, rcy
+    local new_tx, new_ty
     local found_valid = false
     
     print(string.format(
@@ -78,42 +79,58 @@ function PigkingHandler.ProcessPosition(rcx_or_position, rcy_or_nil, layout_name
     
     -- 如果提供了 world 对象，尝试查找合法坐标
     if world then
-        new_rcx, new_rcy, found_valid = LandEdgeFinder.FindNearestValidPosition(old_rcx, old_rcy, world)
-        
-        if found_valid then
-            print(string.format(
-                "[Move Entity V2] 🔧 修改布局 '%s' 坐标: 原坐标 (%.2f, %.2f) -> 新坐标 (%.2f, %.2f) [移动到合法位置，距离边缘 >= 6 tiles]",
-                layout_name, old_rcx, old_rcy, new_rcx, new_rcy
-            ))
+        -- 获取地图尺寸
+        local map_width, map_height = world:GetWorldSize()
+        if not map_width or not map_height then
+            print("[Move Entity V2] ⚠️  无法获取地图尺寸，保持原始坐标")
+            new_tx = old_tx
+            new_ty = old_ty
         else
-            -- 未找到合法坐标，使用原始坐标
-            new_rcx = old_rcx
-            new_rcy = old_rcy
-            print(string.format(
-                "[Move Entity V2] ⚠️  未找到合法坐标，保持原始坐标: (%.2f, %.2f)",
-                old_rcx, old_rcy
-            ))
+            -- 将 tile 坐标转换为世界坐标（FindNearestValidPosition 需要世界坐标）
+            local old_world_x, old_world_y = LandEdgeFinder.TileToWorldCoords(old_tx, old_ty, map_width, map_height)
+            
+            -- 查找最近的合法坐标（返回世界坐标）
+            local new_world_x, new_world_y, found = LandEdgeFinder.FindNearestValidPosition(old_world_x, old_world_y, world)
+            
+            if found then
+                -- 将世界坐标转换回 tile 坐标（ReserveAndPlaceLayout 的 position 需要 tile 坐标）
+                new_tx, new_ty = LandEdgeFinder.WorldToTileCoords(new_world_x, new_world_y, map_width, map_height)
+                found_valid = true
+                print(string.format(
+                    "[Move Entity V2] 🔧 修改布局 '%s' 坐标: tile (%d, %d) -> tile (%d, %d) [移动到合法位置，距离边缘 >= 6 tiles]",
+                    layout_name, old_tx, old_ty, new_tx, new_ty
+                ))
+            else
+                -- 未找到合法坐标，使用原始坐标
+                new_tx = old_tx
+                new_ty = old_ty
+                print(string.format(
+                    "[Move Entity V2] ⚠️  未找到合法坐标，保持原始坐标: tile (%d, %d)",
+                    old_tx, old_ty
+                ))
+            end
         end
     else
         -- 没有 world 对象，使用原始坐标
-        new_rcx = old_rcx
-        new_rcy = old_rcy
+        new_tx = old_tx
+        new_ty = old_ty
         print(string.format(
-            "[Move Entity V2] ⚠️  无 world 对象，保持原始坐标: (%.2f, %.2f)",
-            old_rcx, old_rcy
+            "[Move Entity V2] ⚠️  无 world 对象，保持原始坐标: tile (%d, %d)",
+            old_tx, old_ty
         ))
     end
     
     -- 根据输入格式返回相应格式
+    -- 注意：返回的是 tile 坐标（与 ReserveSpace 返回格式一致）
     -- 如果找到合法坐标，返回修改后的坐标；否则返回原始坐标（should_modify = false）
     if is_table_input then
         if found_valid then
-            return new_rcx, new_rcy, {new_rcx, new_rcy}
+            return new_tx, new_ty, {new_tx, new_ty}
         else
             return rcx, rcy, rcx_or_position
         end
     else
-        return new_rcx, new_rcy, found_valid
+        return new_tx, new_ty, found_valid
     end
 end
 

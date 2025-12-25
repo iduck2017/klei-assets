@@ -1494,3 +1494,595 @@ local tile_y = math.floor((height / 2) + 0.5 + (world_y / TILE_SCALE))
 
 ---
 
+## 调研：远离已放置的特殊 Layout 和 Prefab
+
+**需求**: 在移动特殊 layout 或 prefab 时，不仅需要远离岸边（距离 >= 6 tiles），还需要远离已经放置的其他特殊 layout 和 prefab（距离 >= 6 tiles）。
+
+### 问题分析
+
+当前实现中，`LandEdgeFinder.PrecomputeValidPositions` 只考虑了距离边缘的距离，没有考虑已放置的特殊 layout 和 prefab 的位置。这可能导致：
+1. 多个特殊 layout/prefab 被放置在相近的位置
+2. 新放置的 layout/prefab 可能靠近已放置的特殊 layout/prefab
+
+### 实现方案
+
+#### 方案 1: 动态更新合法坐标集合 ⭐ **推荐**
+
+**思路**:
+1. 在预计算时，只考虑距离边缘 >= 6 tiles 的坐标
+2. 当放置一个特殊 layout/prefab 后，从 `VALID_POSITIONS` 中移除距离该位置 < 6 tiles 的坐标
+3. 后续查找时，自动排除这些已被占用的区域
+
+**优点**:
+- 实现简单，只需要在放置后更新 `VALID_POSITIONS`
+- 性能好，不需要在每次查找时重新计算
+- 逻辑清晰，逐步缩小可用区域
+
+**缺点**:
+- 如果放置顺序不当，可能导致后续 layout/prefab 找不到合法位置
+
+**实现步骤**:
+1. 在 `LandEdgeFinder` 中添加 `RemovePositionsNearby(tile_x, tile_y, min_distance)` 函数
+2. 在 `PigkingHandler.ProcessPosition` 中，放置 layout 后调用该函数
+3. 在 `PrefabHandler.ProcessPrefabPosition` 中，放置 prefab 后调用该函数
+
+#### 方案 2: 在查找时实时检查
+
+**思路**:
+1. 维护一个已放置的特殊 layout/prefab 位置列表
+2. 在 `FindNearestValidPosition` 中，对每个候选坐标检查：
+   - 距离边缘 >= 6 tiles
+   - 距离所有已放置的特殊 layout/prefab >= 6 tiles
+
+**优点**:
+- 不需要修改预计算逻辑
+- 可以灵活处理放置顺序
+
+**缺点**:
+- 每次查找都需要遍历所有已放置的位置，性能较差
+- 如果已放置的位置很多，查找会变慢
+
+#### 方案 3: 混合方案
+
+**思路**:
+1. 预计算时只考虑距离边缘 >= 6 tiles
+2. 在查找时，实时检查距离已放置的特殊 layout/prefab >= 6 tiles
+3. 如果找到合法位置，放置后更新 `VALID_POSITIONS`（移除附近坐标）
+
+**优点**:
+- 结合两种方案的优点
+- 性能较好，逻辑清晰
+
+**缺点**:
+- 实现稍复杂
+
+### 距离计算
+
+**Tile 坐标距离**:
+```lua
+local function TileDistance(tile_x1, tile_y1, tile_x2, tile_y2)
+    local dx = tile_x1 - tile_x2
+    local dy = tile_y1 - tile_y2
+    return math.sqrt(dx * dx + dy * dy)
+end
+```
+
+**世界坐标距离**:
+```lua
+local function WorldDistance(world_x1, world_y1, world_x2, world_y2)
+    local dx = world_x1 - world_x2
+    local dy = world_y1 - world_y2
+    return math.sqrt(dx * dx + dy * dy) / TILE_SCALE  -- 转换为 tile 单位
+end
+```
+
+### 已放置位置记录
+
+需要记录的信息：
+- Layout 名称（用于日志）
+- 最终放置的世界坐标 (world_x, world_y)
+- 对应的 tile 坐标 (tile_x, tile_y)
+
+**数据结构**:
+```lua
+local PLACED_POSITIONS = {
+    {
+        type = "layout",  -- 或 "prefab"
+        name = "DefaultPigking",
+        world_x = 254.00,
+        world_y = 230.00,
+        tile_x = 276,
+        tile_y = 270
+    },
+    -- ...
+}
+```
+
+### 实现建议
+
+**推荐使用方案 1（动态更新合法坐标集合）**:
+
+1. **在 `LandEdgeFinder` 中添加函数**:
+   ```lua
+   -- 移除距离指定位置 < min_distance 的合法坐标
+   function LandEdgeFinder.RemovePositionsNearby(tile_x, tile_y, min_distance)
+       min_distance = min_distance or 6
+       local removed_count = 0
+       
+       for i = #VALID_POSITIONS, 1, -1 do
+           local pos = VALID_POSITIONS[i]
+           local dx = pos.tx - tile_x
+           local dy = pos.ty - tile_y
+           local dist = math.sqrt(dx * dx + dy * dy)
+           
+           if dist < min_distance then
+               table.remove(VALID_POSITIONS, i)
+               removed_count = removed_count + 1
+           end
+       end
+       
+       if removed_count > 0 then
+           print(string.format(
+               "[Move Entity V2] [LandEdgeFinder] 移除了 %d 个距离 tile (%d, %d) < %d tiles 的合法坐标",
+               removed_count, tile_x, tile_y, min_distance
+           ))
+       end
+       
+       return removed_count
+   end
+   ```
+
+2. **在 `PigkingHandler.ProcessPosition` 中调用**:
+   ```lua
+   if found_valid then
+       -- 转换为 tile 坐标
+       local new_tile_x, new_tile_y = WorldToTileCoords(new_rcx, new_rcy, ...)
+       
+       -- 移除附近 6 tiles 的合法坐标
+       LandEdgeFinder.RemovePositionsNearby(new_tile_x, new_tile_y, 6)
+       
+       return new_rcx, new_rcy, true
+   end
+   ```
+
+3. **在 `PrefabHandler.ProcessPrefabPosition` 中调用**:
+   ```lua
+   if found_valid then
+       -- 移除附近 6 tiles 的合法坐标
+       LandEdgeFinder.RemovePositionsNearby(new_tile_x, new_tile_y, 6)
+       
+       return new_tile_x, new_tile_y, true
+   end
+   ```
+
+### 注意事项
+
+1. **放置顺序**:
+   - 如果多个 layout/prefab 需要移动，放置顺序可能影响结果
+   - 建议按照重要性或生成顺序处理
+
+2. **坐标转换**:
+   - Layout 使用世界坐标 (world_x, world_y)
+   - Prefab 使用 tile 坐标 (tile_x, tile_y)
+   - 需要统一转换后再比较距离
+
+3. **边界情况**:
+   - 如果移除后 `VALID_POSITIONS` 为空，后续 layout/prefab 可能找不到合法位置
+   - 需要处理这种情况（返回 false 或使用原始坐标）
+
+4. **性能考虑**:
+   - 每次移除需要遍历 `VALID_POSITIONS`，如果坐标很多可能较慢
+   - 可以考虑使用更高效的数据结构（如空间索引）
+
+### 待实现
+
+- [ ] 在 `LandEdgeFinder` 中添加 `RemovePositionsNearby` 函数
+- [ ] 在 `PigkingHandler.ProcessPosition` 中调用移除函数
+- [ ] 在 `PrefabHandler.ProcessPrefabPosition` 中调用移除函数
+- [ ] 添加日志记录，显示移除了多少坐标
+- [ ] 测试多个 layout/prefab 的放置顺序
+
+---
+
+## 调研：将所有有效坐标的地皮替换为木板地皮
+
+### 需求描述
+
+将所有预计算的有效坐标（距离边缘 >= 6 tiles 的陆地 tile）的地皮替换为木板地皮（WOODFLOOR），以便在游戏中清晰标识这些安全区域。
+
+### 关键 API 调研
+
+#### 1. 设置 Tile 的方法
+
+在世界生成阶段，可以使用以下方法设置 tile：
+
+**方法 1: `WorldSim:SetTile(x, y, tile)`**
+- 参数：
+  - `x, y`: tile 坐标（整数，从 0 开始）
+  - `tile`: tile 类型常量（如 `WORLD_TILES.WOODFLOOR`）
+- 使用场景：世界生成阶段（`modworldgenmain.lua`）
+- 示例：
+  ```lua
+  local WorldSim = require("map/WorldSim")
+  WorldSim:SetTile(tile_x, tile_y, WORLD_TILES.WOODFLOOR)
+  ```
+
+**方法 2: `world:SetTile(x, y, tile)`**
+- 参数：同上
+- 使用场景：世界生成阶段，当有 `world` 对象时
+- 示例：
+  ```lua
+  world:SetTile(tile_x, tile_y, WORLD_TILES.WOODFLOOR)
+  ```
+
+**方法 3: `TheWorld.Map:SetTile(x, y, tile)`**
+- 参数：同上
+- 使用场景：游戏运行时（`modmain.lua`）
+- 注意：会触发 `onterraform` 事件
+- 示例：
+  ```lua
+  TheWorld.Map:SetTile(tile_x, tile_y, WORLD_TILES.WOODFLOOR)
+  ```
+
+#### 2. 木板地皮常量
+
+- **常量名**: `WORLD_TILES.WOODFLOOR`
+- **值**: `10`（定义在 `src/constants.lua:684`）
+- **用途**: 木板地皮，玩家可以制作并放置的地皮类型
+
+#### 3. 相关代码位置
+
+**设置 Tile 的示例代码**:
+- `src/map/object_layout.lua:392`: 在布局放置时设置地皮
+  ```lua
+  world:SetTile(x, y, layout.ground_types[layout.ground[rw][clmn]], 1)
+  ```
+- `src/map/ocean_gen.lua:94`: 在海洋生成时设置地皮
+  ```lua
+  world:SetTile(x, y, ground)
+  ```
+- `src/map/room_functions.lua:18`: 在房间函数中设置地皮
+  ```lua
+  WorldSim:SetTile(points_x[current_pos_idx], points_y[current_pos_idx], current_layer.tile)
+  ```
+
+**地皮替换组件**:
+- `src/components/terraformer.lua:26`: 使用 `map:SetTile(x, y, turf)` 替换地皮
+- `src/prefabs/turfs.lua:15`: 地皮物品部署时使用 `map:SetTile(x, y, tile)`
+
+### 实现方案
+
+#### 方案 1: 在预计算后立即替换（推荐）⭐
+
+在 `LandEdgeFinder.PrecomputeValidPositions` 函数中，每找到一个有效坐标后立即替换地皮。
+
+**优点**:
+- 时机准确：在预计算时立即替换，确保所有有效坐标都被处理
+- 代码集中：逻辑集中在 `land_edge_finder.lua` 中
+- 性能好：只需遍历一次 `VALID_POSITIONS`
+
+**实现步骤**:
+1. 在 `PrecomputeValidPositions` 函数中，添加 `world` 参数（如果还没有）
+2. 在找到有效坐标并添加到 `VALID_POSITIONS` 后，立即调用 `world:SetTile(x, y, WORLD_TILES.WOODFLOOR)`
+3. 添加日志记录，显示替换了多少个 tile
+
+**代码示例**:
+```lua
+function LandEdgeFinder.PrecomputeValidPositions(world, min_distance)
+    -- ... 现有代码 ...
+    
+    for y = 0, map_height - 1 do
+        for x = 0, map_width - 1 do
+            local tile = world:GetTile(x, y)
+            if tile and tile ~= 1 and TileGroupManager:IsLandTile(tile) and not TileGroupManager:IsOceanTile(tile) then
+                local dist_to_edge = DistanceToEdge(x, y, world, 20, 0)
+                
+                if dist_to_edge >= min_distance then
+                    local world_x, world_y = TileToWorldCoords(x, y, map_width, map_height)
+                    table.insert(VALID_POSITIONS, {
+                        tx = x,
+                        ty = y,
+                        world_x = world_x,
+                        world_y = world_y
+                    })
+                    valid_count = valid_count + 1
+                    
+                    -- 替换为木板地皮
+                    world:SetTile(x, y, WORLD_TILES.WOODFLOOR)
+                end
+            end
+        end
+    end
+    
+    print(string.format(
+        "[Move Entity V2] [LandEdgeFinder] 预计算完成: 检查了 %d 个 tiles, 找到 %d 个合法坐标, 已替换 %d 个 tile 为木板地皮",
+        checked_count, valid_count, valid_count
+    ))
+    
+    -- ... 其余代码 ...
+end
+```
+
+#### 方案 2: 在预计算完成后批量替换
+
+在 `PrecomputeValidPositions` 完成后，遍历 `VALID_POSITIONS` 并替换所有地皮。
+
+**优点**:
+- 逻辑分离：预计算和地皮替换分开
+- 易于控制：可以选择性地替换（例如，只替换部分坐标）
+
+**缺点**:
+- 需要遍历两次：一次预计算，一次替换
+- 如果 `VALID_POSITIONS` 被修改，可能不一致
+
+**实现步骤**:
+1. 在 `LandEdgeFinder` 中添加新函数 `ReplaceValidPositionsWithWoodFloor(world)`
+2. 遍历 `VALID_POSITIONS`，对每个坐标调用 `world:SetTile(x, y, WORLD_TILES.WOODFLOOR)`
+3. 在 `PrecomputeValidPositions` 完成后调用此函数
+
+**代码示例**:
+```lua
+function LandEdgeFinder.ReplaceValidPositionsWithWoodFloor(world)
+    if not world then
+        print("[Move Entity V2] ⚠️  无法替换地皮：world 对象为空")
+        return 0
+    end
+    
+    local replaced_count = 0
+    for _, pos in ipairs(VALID_POSITIONS) do
+        local current_tile = world:GetTile(pos.tx, pos.ty)
+        -- 确保是陆地 tile（防止在替换过程中 tile 被修改）
+        if current_tile and current_tile ~= 1 and TileGroupManager:IsLandTile(current_tile) and not TileGroupManager:IsOceanTile(current_tile) then
+            world:SetTile(pos.tx, pos.ty, WORLD_TILES.WOODFLOOR)
+            replaced_count = replaced_count + 1
+        end
+    end
+    
+    print(string.format(
+        "[Move Entity V2] [LandEdgeFinder] 已替换 %d 个有效坐标的地皮为木板地皮",
+        replaced_count
+    ))
+    
+    return replaced_count
+end
+```
+
+#### 方案 3: 在布局放置时替换
+
+在 `FindNearestValidPosition` 找到有效坐标后，立即替换该坐标的地皮。
+
+**优点**:
+- 按需替换：只替换实际使用的坐标
+- 节省资源：不替换未使用的有效坐标
+
+**缺点**:
+- 时机较晚：在布局放置时才替换，可能影响视觉效果
+- 逻辑分散：替换逻辑分散在多个地方
+
+### 注意事项
+
+1. **时机选择**:
+   - 必须在世界生成阶段（`modworldgenmain.lua`）进行
+   - 建议在预计算完成后立即替换，确保所有有效坐标都被处理
+
+2. **Tile 验证**:
+   - 替换前应验证 tile 仍然是有效的陆地 tile
+   - 防止在世界生成过程中 tile 被修改（如变成 IMPASSABLE 或 OCEAN）
+
+3. **性能考虑**:
+   - 如果有效坐标很多（如 18915 个），批量替换可能需要一些时间
+   - 建议添加进度日志，显示替换进度
+
+4. **视觉效果**:
+   - 木板地皮在游戏中是可见的，玩家可以清楚地看到哪些区域是"安全区域"
+   - 如果不想让玩家看到，可以考虑使用其他 tile 类型（如 `WORLD_TILES.ROAD`）
+
+5. **兼容性**:
+   - 确保 `WORLD_TILES.WOODFLOOR` 在所有游戏版本中都可用
+   - 如果不可用，可以使用 `WORLD_TILES.ROAD` 作为替代
+
+### 实现建议
+
+**推荐使用方案 1（在预计算时立即替换）**:
+
+1. **修改 `PrecomputeValidPositions` 函数**:
+   - 在找到有效坐标并添加到 `VALID_POSITIONS` 后，立即调用 `world:SetTile(x, y, WORLD_TILES.WOODFLOOR)`
+   - 添加替换计数，在日志中显示替换了多少个 tile
+
+2. **添加验证**:
+   - 替换前检查 tile 是否仍然是有效的陆地 tile
+   - 如果 tile 已被修改，跳过替换并记录警告
+
+3. **添加配置选项**（可选）:
+   - 在 `modinfo.lua` 或配置文件中添加选项，允许玩家选择是否替换地皮
+   - 或者选择替换为哪种地皮类型
+
+### 待实现
+
+- [ ] 在 `PrecomputeValidPositions` 中添加地皮替换逻辑
+- [ ] 添加替换计数和日志记录
+- [ ] 添加 tile 验证，确保只替换有效的陆地 tile
+- [ ] 测试替换效果，确保所有有效坐标都被正确替换
+- [ ] 考虑添加配置选项，允许玩家自定义地皮类型
+
+---
+
+## 调研：检测世界生成重试
+
+### 需求描述
+
+在每次世界生成重试时打印日志，用于调试和追踪世界生成过程。
+
+### 世界生成重试机制
+
+**源码位置**: `src/worldgen_main.lua:418-439`
+
+**重试流程**:
+```lua
+local try = 1
+local maxtries = 5
+
+while savedata == nil do
+    savedata = forest_map.Generate(...)
+    
+    if savedata == nil then
+        if try >= maxtries then
+            print("An error occured during world and we give up! [was ",try," of ",maxtries,"]")
+            return nil
+        else
+            print("An error occured during world gen we will retry! [was ",try," of ",maxtries,"]")
+        end
+        try = try + 1
+        collectgarbage("collect")
+        WorldSim:ResetAll()  -- 重置世界状态
+    end
+end
+```
+
+**关键发现**:
+1. 每次重试时，`modworldgenmain.lua` 会被重新执行（`src/mods.lua:577`）
+2. 重试时会调用 `WorldSim:ResetAll()` 重置世界状态
+3. 游戏本身会在日志中打印重试消息：`"An error occured during world gen we will retry! [was X of 5]"`
+
+### 检测方案
+
+#### 方案 1: 使用模块级变量记录调用次数（推荐）⭐
+
+**原理**:
+- `modworldgenmain.lua` 在每次重试时都会被重新执行
+- 使用模块级变量记录 `modworldgenmain.lua` 的执行次数
+- 每次执行时检查是否是重试（执行次数 > 1）
+
+**优点**:
+- 简单可靠：不依赖 Hook，直接利用模块加载机制
+- 准确：每次重试都会重新加载模块，计数准确
+- 无副作用：不影响游戏原有逻辑
+
+**缺点**:
+- 无法区分第一次生成和重试（都需要记录）
+
+**实现步骤**:
+1. 在 `modworldgenmain.lua` 中使用模块级变量记录执行次数
+2. 每次执行时检查计数，如果 > 1 则打印重试日志
+3. 可选：记录每次执行的时间戳，便于追踪
+
+**代码示例**:
+```lua
+-- modworldgenmain.lua
+local world_gen_attempt = (world_gen_attempt or 0) + 1
+
+if world_gen_attempt > 1 then
+    print(string.format(
+        "[Move Entity V2] 🔄 检测到世界生成重试: 第 %d 次尝试",
+        world_gen_attempt
+    ))
+else
+    print("[Move Entity V2] 🌍 开始世界生成: 第 1 次尝试")
+end
+
+-- ... 其余代码 ...
+```
+
+**注意事项**:
+- 模块级变量在 Lua 中需要使用全局变量或 `package.loaded` 来持久化
+- 如果使用局部变量，每次模块重新加载时都会重置
+
+#### 方案 2: Hook WorldSim:ResetAll()
+
+**原理**:
+- Hook `WorldSim:ResetAll()` 方法
+- 每次调用时打印重试日志
+
+**优点**:
+- 直接检测重试操作
+- 可以获取更多上下文信息
+
+**缺点**:
+- `ResetAll()` 可能在其他地方也被调用，需要区分
+- 需要确保 Hook 时机正确（在 `WorldSim` 加载后）
+- 可能影响性能
+
+**实现步骤**:
+1. 在 `modworldgenmain.lua` 中 Hook `WorldSim:ResetAll()`
+2. 在 Hook 函数中检查调用栈或上下文，确认是世界生成重试
+3. 打印重试日志
+
+**代码示例**:
+```lua
+-- modworldgenmain.lua
+local original_ResetAll = WorldSim.ResetAll
+local reset_count = 0
+
+WorldSim.ResetAll = function(self, ...)
+    reset_count = reset_count + 1
+    if reset_count > 0 then
+        print(string.format(
+            "[Move Entity V2] 🔄 检测到 WorldSim:ResetAll() 调用: 第 %d 次（可能是世界生成重试）",
+            reset_count
+        ))
+    end
+    return original_ResetAll(self, ...)
+end
+```
+
+**注意事项**:
+- `ResetAll()` 可能在其他场景也被调用（如世界重置）
+- 需要结合其他信息（如 `modworldgenmain.lua` 的执行次数）来确认是重试
+
+#### 方案 3: 监听日志消息
+
+**原理**:
+- Hook `print` 函数，监听重试消息
+- 当检测到 `"An error occured during world gen we will retry!"` 时打印日志
+
+**优点**:
+- 直接检测游戏的重试消息
+- 可以获取重试次数信息
+
+**缺点**:
+- 不够可靠：依赖日志消息格式，可能因版本变化而失效
+- 性能开销：需要 Hook `print` 函数，可能影响性能
+- 实现复杂：需要解析日志消息
+
+**不推荐使用此方案**
+
+### 推荐实现
+
+**推荐使用方案 1（模块级变量记录调用次数）**:
+
+1. **实现简单**: 只需在 `modworldgenmain.lua` 开头添加几行代码
+2. **可靠性高**: 不依赖 Hook，利用模块加载机制
+3. **无副作用**: 不影响游戏原有逻辑
+
+**实现代码**:
+```lua
+-- modworldgenmain.lua
+-- 使用全局变量记录执行次数（在模块重新加载时保持）
+_G.move_entity_v2_world_gen_attempt = (_G.move_entity_v2_world_gen_attempt or 0) + 1
+local attempt = _G.move_entity_v2_world_gen_attempt
+
+if attempt > 1 then
+    print(string.format(
+        "[Move Entity V2] 🔄 检测到世界生成重试: 第 %d 次尝试",
+        attempt
+    ))
+else
+    print("[Move Entity V2] 🌍 开始世界生成: 第 1 次尝试")
+end
+
+-- ... 其余代码 ...
+```
+
+**可选增强**:
+- 记录每次尝试的时间戳
+- 记录重试原因（如果可以从日志中获取）
+- 在重试时重置某些状态（如 `VALID_POSITIONS`）
+
+### 相关文件
+
+- `src/worldgen_main.lua:418-439` - 世界生成重试机制
+- `src/mods.lua:577` - modworldgenmain.lua 加载逻辑
+- `mods/move-entity-v2/modworldgenmain.lua` - Mod 入口文件
+
+---
+

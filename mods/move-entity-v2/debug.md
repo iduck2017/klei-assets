@@ -1050,3 +1050,119 @@ end
    end
    ```
 
+---
+
+## 2025-12-25 猪王定位错误调研
+
+### 问题描述
+
+**现象**：
+- ✅ 地皮替换功能正常工作，说明 `VALID_POSITIONS` 的获取逻辑是正确的
+- ❌ 猪王实际位置不在木板地皮区域内，说明定位逻辑有问题
+
+**日志信息**：
+```
+[00:00:51]: [Move Entity V2] ✅ 找到最近的合法坐标: tile (252, 281) -> 世界坐标 (158.00, 274.00)
+[00:00:51]: [Move Entity V2] 🔧 修改布局 'DefaultPigking' 坐标: 原坐标 (119.00, 259.00) -> 新坐标 (158.00, 274.00)
+[00:00:51]: [Move Entity V2] 布局 'DefaultPigking' -> 位置 (158.00, 274.00)
+```
+
+### 可能的原因分析
+
+#### 1. **坐标系统混用问题**
+
+**关键代码位置** (`src/map/object_layout.lua`)：
+
+```lua
+-- 第 391 行：设置地皮时使用 position
+if position ~= nil then
+    local x, y = position[1] + column, position[2] + row
+    world:SetTile(x, y, layout.ground_types[layout.ground[rw][clmn]], 1)
+    -- SetTile 需要的是 tile 坐标！
+end
+
+-- 第 433-434 行：position 被赋值给 rcx, rcy
+else
+    rcx = position[1]
+    rcy = position[2]
+end
+
+-- 第 447-448 行：rcx, rcy 被调整用于放置 prefab
+rcx = rcx + size + (position == nil and -0.5 or 0.5)
+rcy = rcy + size + (position == nil and -0.5 or 0.5)
+-- 这里 rcx, rcy 变成了世界坐标（用于放置 prefab）
+```
+
+**问题分析**：
+- `ReserveSpace` 返回的是 **tile 左下角坐标**（从第 425 行 `rcx + column` 可以看出）
+- `SetTile` 需要的是 **tile 坐标**（整数）
+- 但我们传入的 `position` 是 **世界坐标**（浮点数，如 158.00）
+- 当 `position[1] = 158.00` 时，`SetTile(158.00 + column, ...)` 会被当作 tile 坐标 158，而不是正确的 tile 坐标
+
+**验证方法**：
+- 检查 `ReserveSpace` 返回的坐标格式
+- 检查 `position` 参数在 `ReserveAndPlaceLayout` 中的实际使用方式
+
+#### 2. **ReserveSpace 返回格式问题**
+
+**需要确认**：
+- `ReserveSpace` 返回的是 tile 坐标还是世界坐标？
+- 从代码第 425 行看：`local x, y = rcx + column, rcy + row`，这里 `rcx + column` 用于 `MakeSafeFromDisconnect`，说明 `rcx` 应该是 tile 坐标
+- 但我们传入的 `new_rcx, new_rcy` 是世界坐标（从 `FindNearestValidPosition` 返回）
+
+**可能的问题**：
+- `FindNearestValidPosition` 返回的是世界坐标（tile 左下角的世界坐标）
+- 但 `ReserveAndPlaceLayout` 的 `position` 参数需要的是 tile 坐标（用于 `SetTile`）
+- 坐标格式不匹配导致定位错误
+
+#### 3. **坐标转换时机问题**
+
+**执行流程**：
+1. `ReserveSpace` 返回原始坐标（tile 坐标）
+2. `ProcessPosition` 转换为世界坐标并查找最近合法位置
+3. `FindNearestValidPosition` 返回世界坐标
+4. 传入 `ReserveAndPlaceLayout` 的 `position` 参数
+5. `ReserveAndPlaceLayout` 内部使用 `position` 设置地皮（需要 tile 坐标）
+
+**问题**：
+- 步骤 4 传入的是世界坐标，但步骤 5 需要 tile 坐标
+- 缺少从世界坐标到 tile 坐标的转换
+
+#### 4. **地皮设置和实体放置的坐标不一致**
+
+**关键代码** (`src/map/object_layout.lua:391-392, 447-448`)：
+```lua
+-- 地皮设置（第 391 行）：使用 position（应该是 tile 坐标）
+local x, y = position[1] + column, position[2] + row
+world:SetTile(x, y, ...)
+
+-- 实体放置（第 447-448 行）：使用调整后的 rcx, rcy（世界坐标）
+rcx = rcx + size + 0.5
+rcy = rcy + size + 0.5
+-- 然后用于放置 prefab
+```
+
+**问题**：
+- 如果 `position` 是世界坐标，地皮会被设置在错误的 tile 上
+- 但实体放置使用的是调整后的 `rcx, rcy`（世界坐标），可能位置正确
+- 导致地皮和实体不在同一个位置
+
+### 调研方向
+
+1. **确认 ReserveSpace 返回格式**：
+   - 查看 `ReserveSpace` 的实现或文档
+   - 检查其他使用 `ReserveSpace` 的地方如何处理返回值
+
+2. **确认 position 参数格式**：
+   - 查看 `ReserveAndPlaceLayout` 中 `position` 参数的实际使用
+   - 检查是否有其他代码传入 `position` 参数，看它们传入的是什么格式
+
+3. **添加调试日志**：
+   - 在传入 `position` 前记录坐标值
+   - 在 `ReserveAndPlaceLayout` 内部记录 `rcx, rcy` 的值
+   - 对比地皮设置的坐标和实体放置的坐标
+
+4. **验证坐标转换**：
+   - 确认 `WorldToTileCoords` 和 `TileToWorldCoords` 的转换是否正确
+   - 验证转换后的坐标是否与 `ReserveSpace` 返回的格式一致
+

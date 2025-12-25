@@ -27,6 +27,11 @@ local function InstallLayoutHook()
     end
     
     local LandEdgeFinder = require("land_edge_finder")
+    
+    -- 每次 InstallLayoutHook 被调用时（包括世界生成重试），清空之前的合法坐标
+    -- 确保每次世界生成都重新计算 valid_pos
+    LandEdgeFinder.ClearValidPositions()
+    
     local precomputed = false  -- 标记是否已经预计算
     
     local original_Convert = obj_layout.Convert

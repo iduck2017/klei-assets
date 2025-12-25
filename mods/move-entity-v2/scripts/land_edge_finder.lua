@@ -260,11 +260,11 @@ function LandEdgeFinder.PrecomputeValidPositions(world, min_distance)
             
             -- 检查是否是陆地 tile（确保是陆地且不是海洋）
             local tile = world:GetTile(x, y)
-            if tile and TileGroupManager:IsLandTile(tile) and not TileGroupManager:IsOceanTile(tile) then
+            if tile and tile ~= 1 and TileGroupManager:IsLandTile(tile) and not TileGroupManager:IsOceanTile(tile) then
                 -- 检查距离边缘是否 >= min_distance
-                -- 优化：如果搜索到 min_distance 距离还没找到边缘，说明距离 >= min_distance
-                -- 但为了准确，我们搜索到 min_distance + 5 以确保找到最近的边缘
-                local dist_to_edge = DistanceToEdge(x, y, world, min_distance + 5, min_distance)
+                -- 使用足够大的搜索半径（20）以确保找到最近的边缘
+                local dist_to_edge = DistanceToEdge(x, y, world, 20, 0)
+                
                 if dist_to_edge >= min_distance then
                     -- 转换为世界坐标并存储
                     local world_x, world_y = TileToWorldCoords(x, y, map_width, map_height)
@@ -285,7 +285,82 @@ function LandEdgeFinder.PrecomputeValidPositions(world, min_distance)
         checked_count, valid_count
     ))
     
+    -- 绘制有效坐标的可视化地图（20x20 网格）
+    LandEdgeFinder.DrawValidPositionsMap(map_width, map_height, world)
+    
     return valid_count
+end
+
+-- 绘制有效坐标的可视化地图（20x20 网格）
+-- map_width, map_height: 地图尺寸（tile 单位）
+-- world: WorldSim 对象（可选，用于识别月岛）
+function LandEdgeFinder.DrawValidPositionsMap(map_width, map_height, world)
+    local grid_size = 20
+    local grid = {}
+    local grid_has_valid = {}  -- 标记每个网格区域是否有有效坐标
+    
+    -- 初始化网格（全部为空）
+    for y = 1, grid_size do
+        grid[y] = {}
+        grid_has_valid[y] = {}
+        for x = 1, grid_size do
+            grid[y][x] = "口"  -- 使用汉字"口"作为填充单位
+            grid_has_valid[y][x] = false
+        end
+    end
+    
+    -- 将有效坐标映射到网格中
+    for _, pos in ipairs(VALID_POSITIONS) do
+        -- 将 tile 坐标映射到 0-19 的网格坐标
+        local grid_x = math.floor((pos.tx / map_width) * grid_size) + 1
+        local grid_y = math.floor((pos.ty / map_height) * grid_size) + 1
+        
+        -- 确保在范围内
+        if grid_x >= 1 and grid_x <= grid_size and grid_y >= 1 and grid_y <= grid_size then
+            grid_has_valid[grid_y][grid_x] = true
+        end
+    end
+    
+    -- 根据统计结果设置网格字符
+    for y = 1, grid_size do
+        for x = 1, grid_size do
+            if grid_has_valid[y][x] then
+                -- 有有效位置，使用"■"
+                grid[y][x] = "区"
+            else
+                -- 无有效位置，保持"口"
+                grid[y][x] = "口"
+            end
+        end
+    end
+    
+    -- 输出网格（从上到下，y 从大到小，对应地图的北到南）
+    print("[Move Entity V2] [LandEdgeFinder] ========== 有效坐标分布图（20x20 网格）==========")
+    print("[Move Entity V2] [LandEdgeFinder] 图例: ■=有有效位置, 口=无有效位置")
+    print("[Move Entity V2] [LandEdgeFinder] 地图尺寸: " .. map_width .. " x " .. map_height .. " tiles")
+    print("[Move Entity V2] [LandEdgeFinder] " .. string.rep("─", grid_size + 2))
+    
+    -- 输出列号（可选，帮助定位）
+    local header = "│ "
+    for x = 1, grid_size do
+        header = header .. (x % 10)
+    end
+    header = header .. " │"
+    print("[Move Entity V2] [LandEdgeFinder] " .. header)
+    print("[Move Entity V2] [LandEdgeFinder] " .. string.rep("─", grid_size + 2))
+    
+    -- 输出网格内容（从上到下）
+    for y = grid_size, 1, -1 do
+        local line = "│"
+        for x = 1, grid_size do
+            line = line .. grid[y][x]
+        end
+        line = line .. "│ " .. string.format("%2d", y)  -- 显示行号
+        print("[Move Entity V2] [LandEdgeFinder] " .. line)
+    end
+    
+    print("[Move Entity V2] [LandEdgeFinder] " .. string.rep("─", grid_size + 2))
+    print("[Move Entity V2] [LandEdgeFinder] ================================================")
 end
 
 -- 查找最近的合法坐标
@@ -342,7 +417,8 @@ function LandEdgeFinder.FindNearestValidPosition(world_x, world_y, world, map_wi
         -- 再次验证该位置是否是陆地 tile（防止预计算后 tile 被修改）
         if world then
             local tile = world:GetTile(best_pos.tx, best_pos.ty)
-            if not tile or not TileGroupManager:IsLandTile(tile) or TileGroupManager:IsOceanTile(tile) then
+            -- 检查是否是有效的陆地 tile：不是 IMPASSABLE (1)，是陆地，不是海洋
+            if not tile or tile == 1 or not TileGroupManager:IsLandTile(tile) or TileGroupManager:IsOceanTile(tile) then
                 print(string.format(
                     "[Move Entity V2] ⚠️  预计算的合法坐标 tile (%d, %d) 不再是陆地 tile（类型: %s），跳过并继续查找",
                     best_pos.tx, best_pos.ty, tostring(tile)
@@ -358,10 +434,13 @@ function LandEdgeFinder.FindNearestValidPosition(world_x, world_y, world, map_wi
                 best_pos = nil
             else
                 -- 验证通过，返回结果
-                local dist = math.sqrt(min_dist_sq)
+                -- 计算新坐标距离边缘的实际距离
+                local actual_dist_to_edge = DistanceToEdge(best_pos.tx, best_pos.ty, world, 20, 0)
+                local dist = math.sqrt(min_dist_sq)  -- 从原位置到新位置的移动距离
+                local dist_to_edge_str = (actual_dist_to_edge == math.huge) and ">20" or string.format("%.2f", actual_dist_to_edge)
                 print(string.format(
-                    "[Move Entity V2] ✅ 找到最近的合法坐标: tile (%d, %d) -> 世界坐标 (%.2f, %.2f), 距离 %.2f tiles",
-                    best_pos.tx, best_pos.ty, best_pos.world_x, best_pos.world_y, dist
+                    "[Move Entity V2] ✅ 找到最近的合法坐标: tile (%d, %d) -> 世界坐标 (%.2f, %.2f), 移动距离 %.2f tiles, 距离边缘 %s tiles",
+                    best_pos.tx, best_pos.ty, best_pos.world_x, best_pos.world_y, dist, dist_to_edge_str
                 ))
                 return best_pos.world_x, best_pos.world_y, true
             end
@@ -369,7 +448,7 @@ function LandEdgeFinder.FindNearestValidPosition(world_x, world_y, world, map_wi
             -- 没有 world 对象，无法验证，直接返回（理论上不应该发生）
             local dist = math.sqrt(min_dist_sq)
             print(string.format(
-                "[Move Entity V2] ✅ 找到最近的合法坐标: tile (%d, %d) -> 世界坐标 (%.2f, %.2f), 距离 %.2f tiles (未验证)",
+                "[Move Entity V2] ✅ 找到最近的合法坐标: tile (%d, %d) -> 世界坐标 (%.2f, %.2f), 移动距离 %.2f tiles (未验证距离边缘)",
                 best_pos.tx, best_pos.ty, best_pos.world_x, best_pos.world_y, dist
             ))
             return best_pos.world_x, best_pos.world_y, true
@@ -386,6 +465,29 @@ function LandEdgeFinder.ClearValidPositions()
     VALID_POSITIONS = {}
     print("[Move Entity V2] [LandEdgeFinder] 已清空合法坐标集合")
 end
+
+-- 获取合法坐标集合（返回副本，避免外部修改）
+function LandEdgeFinder.GetValidPositions()
+    local result = {}
+    for _, pos in ipairs(VALID_POSITIONS) do
+        table.insert(result, {
+            tx = pos.tx,
+            ty = pos.ty,
+            world_x = pos.world_x,
+            world_y = pos.world_y
+        })
+    end
+    return result
+end
+
+-- 获取合法坐标数量
+function LandEdgeFinder.GetValidPositionsCount()
+    return #VALID_POSITIONS
+end
+
+-- 导出坐标转换函数供其他模块使用
+LandEdgeFinder.TileToWorldCoords = TileToWorldCoords
+LandEdgeFinder.WorldToTileCoords = WorldToTileCoords
 
 return LandEdgeFinder
 
