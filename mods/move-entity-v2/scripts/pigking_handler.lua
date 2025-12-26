@@ -39,36 +39,36 @@ function PigkingHandler.IsPigkingLayout(layout_name)
 end
 
 -- 统一的特殊布局坐标处理函数（支持多个 layout）
--- 输入: rcx, rcy (两个数字) 或 position (表), layout_name, world (WorldSim 对象，可选)
--- 返回: new_rcx, new_rcy, should_modify (boolean) 或 modified_position (表)
+-- 输入: tx, ty (两个数字，tile 坐标) 或 position (表，tile 坐标), layout_name, world (WorldSim 对象，可选)
+-- 返回: new_tx, new_ty (tile 坐标), should_modify (boolean) 或 modified_position (表)
 -- 说明: 如果 layout_name 在 SPECIAL_LAYOUTS 列表中，会尝试移动到距离边缘 >= 6 tiles 的合法位置
-function PigkingHandler.ProcessPosition(rcx_or_position, rcy_or_nil, layout_name, world)
+function PigkingHandler.ProcessPosition(tx_or_position, ty_or_nil, layout_name, world)
     -- 判断输入格式：是 position 表还是两个数字
-    local rcx, rcy
-    local is_table_input = type(rcx_or_position) == "table"
+    local tx, ty
+    local is_table_input = type(tx_or_position) == "table"
     
     if is_table_input then
         -- 输入是 position 表
-        rcx = rcx_or_position[1]
-        rcy = rcx_or_position[2]
+        tx = tx_or_position[1]
+        ty = tx_or_position[2]
     else
         -- 输入是两个数字
-        rcx = rcx_or_position
-        rcy = rcy_or_nil
+        tx = tx_or_position
+        ty = ty_or_nil
     end
     
     -- 检查是否是需要移动的特殊布局
     if not PigkingHandler.ShouldMoveLayout(layout_name) then
         if is_table_input then
-            return rcx, rcy, rcx_or_position
+            return tx, ty, tx_or_position
         else
-            return rcx, rcy, false
+            return tx, ty, false
         end
     end
     
     -- 修改坐标：查找最近的合法坐标（距离边缘 >= 6 tiles）
-    -- 注意：rcx, rcy 是 tile 坐标（从 ReserveSpace 返回）
-    local old_tx, old_ty = rcx, rcy
+    -- 注意：tx, ty 是 tile 坐标（从 ReserveSpace 返回）
+    local old_tx, old_ty = tx, ty
     local new_tx, new_ty
     local found_valid = false
     
@@ -86,15 +86,11 @@ function PigkingHandler.ProcessPosition(rcx_or_position, rcy_or_nil, layout_name
             new_tx = old_tx
             new_ty = old_ty
         else
-            -- 将 tile 坐标转换为世界坐标（FindNearestValidPosition 需要世界坐标）
-            local old_world_x, old_world_y = LandEdgeFinder.TileToWorldCoords(old_tx, old_ty, map_width, map_height)
-            
-            -- 查找最近的合法坐标（返回世界坐标）
-            local new_world_x, new_world_y, found = LandEdgeFinder.FindNearestValidPosition(old_world_x, old_world_y, world)
+            -- 直接使用 tile 坐标查找最近的合法坐标（避免不必要的坐标转换）
+            local found
+            new_tx, new_ty, found = LandEdgeFinder.FindNearestValidPosition(old_tx, old_ty, world)
         
             if found then
-                -- 将世界坐标转换回 tile 坐标（ReserveAndPlaceLayout 的 position 需要 tile 坐标）
-                new_tx, new_ty = LandEdgeFinder.WorldToTileCoords(new_world_x, new_world_y, map_width, map_height)
                 found_valid = true
                 
                 -- 移除距离该位置 < 8 tiles 的合法坐标（确保主要建筑之间最小距离 >= 8 tiles）
@@ -131,7 +127,7 @@ function PigkingHandler.ProcessPosition(rcx_or_position, rcy_or_nil, layout_name
         if found_valid then
             return new_tx, new_ty, {new_tx, new_ty}
         else
-            return rcx, rcy, rcx_or_position
+            return tx, ty, tx_or_position
         end
     else
         return new_tx, new_ty, found_valid

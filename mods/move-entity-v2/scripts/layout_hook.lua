@@ -112,32 +112,35 @@ local function InstallLayoutHook()
         layout.fill_mask = layout.fill_mask or 0
         layout.layout_position = layout.layout_position or 0
         
-        -- 调用 ReserveSpace 获取原始坐标
+        -- 调用 ReserveSpace 获取原始坐标（保留区域的左下角，tile 坐标）
         -- 注意：传入 nil 作为 tiles，这样 ReserveSpace 不会放置地皮，只会保留空间
         -- 然后我们设置 position，让代码走 position ~= nil 分支，地皮会在新位置放置一次
         local world = WorldSim
-        local old_rcx, old_rcy = world:ReserveSpace(node_id, size, layout.start_mask, layout.fill_mask, layout.layout_position, nil)
+        local old_tx, old_ty = world:ReserveSpace(node_id, size, layout.start_mask, layout.fill_mask, layout.layout_position, nil)
         
-        if old_rcx then
+        if old_tx then
             -- 处理特殊布局坐标修改（只在这里调用一次）
             -- 传入 world 对象以支持查找合法坐标（距离边缘 >= 6 tiles）
-            local new_rcx, new_rcy, should_modify = PigkingHandler.ProcessPosition(old_rcx, old_rcy, layout_name, world)
+            -- ProcessPosition 返回的是某个 tile 的坐标（该 tile 的左下角），这个 tile 就是保留区域的左下角
+            local new_tx, new_ty, should_modify = PigkingHandler.ProcessPosition(old_tx, old_ty, layout_name, world)
             
             -- 无论是否需要修改，都设置 position，避免进入 ReserveSpace Wrapper 分支
             -- 这样可以确保 ProcessPosition 只调用一次
             if not should_modify then
-                new_rcx = old_rcx
-                new_rcy = old_rcy
+                new_tx = old_tx
+                new_ty = old_ty
             end
             
-            -- 记录布局名称和位置
-            print(string.format(
-                "[Move Entity V2] 布局 '%s' -> 位置 (%.2f, %.2f)",
-                layout_name, new_rcx, new_rcy
-            ))
+            -- new_tx, new_ty 已经是布局中心点（tile 坐标）
+            -- ReserveAndPlaceLayout 期望 position 是保留区域的左下角（角落）
+            -- 保留区域的左下角 = 布局中心点 - size - 0.5
+            local position = {new_tx - size - 0.5, new_ty - size - 0.5}
             
-            -- 创建 position（已在 Convert Hook 中处理过，确保只调用一次 ProcessPosition）
-            local position = {new_rcx, new_rcy}
+            -- 记录布局名称和位置（布局中心点）
+            print(string.format(
+                "[Move Entity V2] 布局 '%s' -> 中心点 (%.2f, %.2f), size=%.2f, 保留区域左下角 (%.2f, %.2f)",
+                layout_name, new_tx, new_ty, size, position[1], position[2]
+            ))
             
             return obj_layout.ReserveAndPlaceLayout(node_id, layout, prefabs, addEntity, position, world)
         else

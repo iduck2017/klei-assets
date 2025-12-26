@@ -1327,3 +1327,219 @@ end
 - `mods/move-entity-v2/scripts/turf_replacer_hook.lua` - 地皮替换 Hook
 - `mods/move-entity-v2/modworldgenmain.lua` - Mod 入口文件
 
+---
+
+## 调研：ReserveSpace 返回位置与最终放置位置不一致
+
+### 问题描述
+
+根据日志观察，即使没有修改 pigking 的位置（`should_modify = false`），最终放置的位置也不在 `ReserveSpace` 返回的位置上。
+
+**日志证据**：
+```
+[Move Entity V2] ✅ 找到最近的合法坐标: tile (191, 69) -> 世界坐标 (-86.00, -574.00), 移动距离 0.00 tiles
+[Move Entity V2] 布局 'DefaultPigking' -> 位置 (191.00, 69.00)
+最终 pigking 位置: {-68.00, 0.00, -556.00}
+```
+
+### 源码分析
+
+#### 1. ReserveAndPlaceLayout 的执行流程
+
+**关键代码** (`src/map/object_layout.lua:412-448`)：
+```lua
+-- 第412-435行：确定保留区域左下角坐标 (rcx, rcy)
+local rcx = 0
+local rcy = 0
+if position == nil then
+    rcx, rcy = world:ReserveSpace(...)  -- 自动寻找位置
+else
+    rcx = position[1]  -- 直接使用 position 的值
+    rcy = position[2]  -- 不会再次调用 ReserveSpace
+end
+
+-- 第447-448行：转换为布局中心点坐标（用于放置 prefab）
+rcx = rcx + size + (position == nil and -0.5 or 0.5)
+rcy = rcy + size + (position == nil and -0.5 or 0.5)
+```
+
+**关键发现**：
+- 当 `position ~= nil` 时，`ReserveAndPlaceLayout` **不会再次调用 ReserveSpace**
+- 直接使用 `position[1]` 和 `position[2]` 作为 `rcx` 和 `rcy`
+- 第 447-448 行将 tile 坐标转换为世界坐标（用于 `add_entity.fn()`）
+
+#### 2. Mod 代码的执行流程
+
+**当前实现** (`layout_hook.lua:115-142`)：
+```lua
+-- 第119行：第一次调用 ReserveSpace，获取原始位置
+local old_rcx, old_rcy = world:ReserveSpace(node_id, size, ..., nil)
+
+-- 第124行：计算新位置
+local new_rcx, new_rcy, should_modify = PigkingHandler.ProcessPosition(old_rcx, old_rcy, layout_name, world)
+
+-- 第142行：传入 position 参数
+return obj_layout.ReserveAndPlaceLayout(..., {new_rcx, new_rcy}, ...)
+```
+
+**问题分析**：
+1. 第119行调用 `ReserveSpace` 时，即使 `tiles` 为 `nil`，`ReserveSpace` 仍然会**保留空间**（标记 `old_rcx, old_rcy` 区域为已保留）
+2. 第142行传入 `position` 后，`ReserveAndPlaceLayout` 会直接使用 `position` 的值，不会再次调用 `ReserveSpace`
+3. 因此，第一次 `ReserveSpace` 调用已经保留了 `old_rcx, old_rcy` 的空间，但实际放置使用的是 `new_rcx, new_rcy`
+
+#### 3. 坐标系统问题
+
+**坐标转换链**：
+1. `ReserveSpace` 返回：**tile 坐标**（如 `191, 69`）
+2. `ProcessPosition` 中：
+   - 转换为世界坐标：`TileToWorldCoords(191, 69)` → `(-86.00, -574.00)`
+   - `FindNearestValidPosition` 返回：**世界坐标** `(-86.00, -574.00)`
+   - 转换回 tile 坐标：`WorldToTileCoords(-86.00, -574.00)` → `(191, 69)`
+3. 传入 `ReserveAndPlaceLayout` 的 `position`：**tile 坐标** `(191.00, 69.00)`
+4. `ReserveAndPlaceLayout` 第 447-448 行：
+   ```lua
+   rcx = rcx + size + 0.5  -- 191 + size + 0.5
+   rcy = rcy + size + 0.5  -- 69 + size + 0.5
+   ```
+   这里 `rcx` 和 `rcy` 从 **tile 坐标** 转换为 **世界坐标**（用于 `add_entity.fn()`）
+
+**问题**：
+- `size` 的单位是什么？是 tile 单位还是世界坐标单位？
+- 如果 `size` 是 tile 单位的一半（从第 404 行 `size = size / 2.0` 可以看出），那么转换公式应该是：
+  - `world_x = (rcx - map_width/2) * TILE_SCALE + (size + 0.5) * TILE_SCALE`
+- 但实际代码是：`rcx = rcx + size + 0.5`，这假设 `rcx` 已经是世界坐标，或者 `size` 已经是世界坐标单位
+
+#### 4. size 的定义和来源
+
+**size 的计算过程** (`src/map/object_layout.lua:302-404`)：
+
+```lua
+-- 第 302-308 行：计算边界框
+local item_positions = {}
+for i, val in ipairs(prefabs) do
+    table.insert(item_positions, {val.x, val.y})
+end
+local extents = MinBoundingBox(item_positions)
+
+-- 第 310-317 行：计算 size（基于 prefab 的相对坐标）
+local e_width = (extents.xmax - extents.xmin) / 2.0
+local e_height = (extents.ymax - extents.ymin) / 2.0
+local size = e_width
+if size < e_height then
+    size = e_height
+end
+
+-- 第 319 行：应用 layout.scale
+size = layout.scale * size
+
+-- 第 350-404 行：如果有 layout.ground，使用 ground 的尺寸
+if layout.ground ~= nil then
+    size = #layout.ground  -- ground 的边长（tile 数量）
+    -- ... 处理 ground tiles ...
+    size = size / 2.0  -- 转换为半径（tile 单位的一半）
+end
+```
+
+**size 的单位**：
+
+1. **初始计算**（第 310-319 行）：
+   - `e_width` 和 `e_height` 是 prefab 相对坐标的边界框尺寸（单位：布局的相对坐标单位）
+   - `size = max(e_width, e_height) * layout.scale`（单位：布局的相对坐标单位）
+
+2. **如果有 layout.ground**（第 350-404 行）：
+   - 第 351 行：`size = #layout.ground`（单位：**tile 数量**，即布局的边长，例如 32 tiles）
+   - 第 404 行：`size = size / 2.0`（单位：**tile 数量**，即布局的半径，例如 16 tiles）
+   - **注意**：这里 `size` 的值发生了变化，从边长（例如 32 tiles）变为半径（例如 16 tiles），但单位仍然是 **tile 数量**
+
+3. **传递给 ReserveSpace**（第 416 行）：
+   - `world:ReserveSpace(node_id, size, ...)`
+   - **有 layout.ground 时**：`size` 是布局的半径，单位是 **tile 数量**（例如 16 tiles）
+   - **没有 layout.ground 时**：`size` 的单位是 **布局的相对坐标单位**（不是 tile 单位）
+   - 从第 420 行 `for column = 1, size*2 do` 可以看出，`size*2` 是 tile 数量，所以 `size` 应该是布局的半径（tile 数量）
+   - **但如果没有 layout.ground，`size` 的单位是布局的相对坐标单位，不是 tile 单位**，这可能是一个问题
+
+4. **在坐标转换中使用**（第 447-448 行）：
+   ```lua
+   rcx = rcx + size + (position == nil and -0.5 or 0.5)
+   rcy = rcy + size + (position == nil and -0.5 or 0.5)
+   ```
+   - `rcx` 和 `rcy` 是 **tile 坐标**（从 `ReserveSpace` 返回或从 `position` 获取）
+   - **有 layout.ground 时**：`size` 是布局的半径，单位是 **tile 数量**（例如 16 tiles）
+   - **没有 layout.ground 时**：`size` 的单位是布局的相对坐标单位（不是 tile 单位）
+   - `rcx + size + 0.5` 的结果是 **tile 坐标**（布局中心点的 tile 坐标）
+
+**关键发现**：
+
+- **有 layout.ground 时**：`size` 是布局的半径，单位是 **tile 数量**（例如 16 tiles）
+- **没有 layout.ground 时**：`size` 的单位是 **布局的相对坐标单位**（不是 tile 单位）
+- 第 447-448 行的 `rcx = rcx + size + 0.5` 是将 tile 坐标从**左下角**转换为**中心点**，结果仍然是 **tile 坐标**
+- **问题**：如果没有 `layout.ground`，`size` 的单位是布局的相对坐标单位，但 `rcx` 是 tile 坐标，单位不匹配可能导致计算错误
+- 从第 476-477 行可以看出：
+  ```lua
+  local points_x = rcx + x * layout.scale
+  local points_y = rcy + y * layout.scale
+  ```
+  这里 `rcx` 和 `rcy` 是 **tile 坐标**（布局中心点的 tile 坐标），`x` 和 `y` 是 prefab 的相对坐标（单位：布局的相对坐标单位）
+- `add_entity.fn()` 接收的是 **tile 坐标**（`points_x`, `points_y`），然后在 `PopulateWorld_AddEntity` 内部转换为世界坐标
+
+**坐标系统确认**：
+
+1. **ReserveSpace 返回**：**tile 坐标**（保留区域左下角）
+2. **第 447-448 行转换后**：**tile 坐标**（布局中心点）
+3. **第 476-477 行计算**：**tile 坐标**（每个 prefab 的 tile 坐标）
+4. **add_entity.fn() 接收**：**tile 坐标**
+5. **PopulateWorld_AddEntity 内部转换**：tile 坐标 → 世界坐标（第 193-194 行）
+
+**结论**：
+
+- `ReserveSpace` 返回的是 **tile 坐标**
+- **有 layout.ground 时**：`size` 是布局的半径，单位是 **tile 数量**（例如 16 tiles）
+- **没有 layout.ground 时**：`size` 的单位是 **布局的相对坐标单位**（不是 tile 单位），这可能与 `rcx`（tile 坐标）的单位不匹配
+- `rcx` 和 `rcy` 在整个 `ReserveAndPlaceLayout` 函数中都是 **tile 坐标**
+- 坐标转换发生在 `PopulateWorld_AddEntity` 内部，不在 `ReserveAndPlaceLayout` 中
+
+**待验证**：
+
+- [ ] 确认没有 `layout.ground` 时，`size` 的单位（布局的相对坐标单位）如何与 tile 坐标进行运算
+- [ ] 检查 `layout.scale` 的值，确认相对坐标单位与 tile 单位的转换关系
+- [ ] 验证第 447-448 行的 `rcx = rcx + size + 0.5` 在没有 `layout.ground` 时是否正确
+
+**验证方法**：
+
+- 检查 `ReserveSpace` 返回的坐标格式（tile 坐标还是世界坐标）
+- 检查 `size` 的实际值（tile 单位的一半还是其他单位）
+- 检查第 476-477 行中 `rcx` 和 `rcy` 的实际使用方式
+
+### 可能的原因
+
+1. **ReserveSpace 返回的坐标格式问题**：
+   - `ReserveSpace` 可能返回的不是 tile 坐标，而是其他格式
+   - 或者 `ReserveSpace` 返回的坐标需要特殊处理
+
+2. **size 的单位问题**：
+   - `size` 的单位可能不是我们预期的 tile 单位的一半
+   - 或者 `size` 在传递给 `ReserveSpace` 时已经被转换了
+
+3. **坐标转换精度问题**：
+   - `WorldToTileCoords` 和 `TileToWorldCoords` 的转换可能有精度损失
+   - 导致转换后的坐标与原始坐标不完全一致
+
+4. **ReserveSpace 保留空间的影响**：
+   - 第一次调用 `ReserveSpace` 时已经保留了 `old_rcx, old_rcy` 的空间
+   - 即使后续传入不同的 `position`，可能因为空间已被保留而使用原位置
+
+### 待验证
+
+- [ ] 确认 `ReserveSpace` 返回的坐标格式（tile 坐标还是世界坐标）
+- [ ] 确认 `size` 的单位（tile 单位还是世界坐标单位）
+- [ ] 验证 `WorldToTileCoords` 和 `TileToWorldCoords` 的转换是否正确
+- [ ] 检查 `ReserveSpace` 是否在第一次调用时已经保留了空间，影响后续位置
+- [ ] 添加调试日志，记录 `ReserveSpace` 返回的坐标、`size` 的值、以及最终放置的坐标
+
+### 相关文件
+
+- `src/map/object_layout.lua:412-448` - `ReserveAndPlaceLayout` 的位置确定逻辑
+- `mods/move-entity-v2/scripts/layout_hook.lua:115-142` - Mod 的位置修改逻辑
+- `mods/move-entity-v2/scripts/pigking_handler.lua:88-97` - 坐标转换逻辑
+- `mods/move-entity-v2/scripts/land_edge_finder.lua:60-75` - 坐标转换函数
+

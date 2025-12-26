@@ -27,24 +27,6 @@ function PrefabHandler.ShouldMovePrefab(prefab_name)
     return false
 end
 
--- 将 tile 坐标转换为世界坐标
--- tile_x, tile_y: tile 坐标
--- width, height: 地图尺寸（tile 单位）
-local function TileToWorldCoords(tile_x, tile_y, width, height)
-    local world_x = (tile_x - width/2.0) * TILE_SCALE
-    local world_y = (tile_y - height/2.0) * TILE_SCALE
-    return world_x, world_y
-end
-
--- 将世界坐标转换为 tile 坐标
--- world_x, world_y: 世界坐标
--- width, height: 地图尺寸（tile 单位）
-local function WorldToTileCoords(world_x, world_y, width, height)
-    local tile_x = math.floor((width / 2) + 0.5 + (world_x / TILE_SCALE))
-    local tile_y = math.floor((height / 2) + 0.5 + (world_y / TILE_SCALE))
-    return tile_x, tile_y
-end
-
 -- 处理 prefab 坐标
 -- prefab: prefab 名称
 -- tile_x, tile_y: 原始 tile 坐标
@@ -57,15 +39,10 @@ function PrefabHandler.ProcessPrefabPosition(prefab, tile_x, tile_y, width, heig
         return tile_x, tile_y, false
     end
     
-    -- 转换为世界坐标
-    local world_x, world_y = TileToWorldCoords(tile_x, tile_y, width, height)
-    
-    -- 查找最近的合法坐标（距离边缘 >= 6 tiles）
-    local new_world_x, new_world_y, found_valid = LandEdgeFinder.FindNearestValidPosition(world_x, world_y, world)
+    -- 直接使用 tile 坐标查找最近的合法坐标（避免不必要的坐标转换）
+    local new_tile_x, new_tile_y, found_valid = LandEdgeFinder.FindNearestValidPosition(tile_x, tile_y, world)
     
     if found_valid then
-        -- 转换回 tile 坐标
-        local new_tile_x, new_tile_y = WorldToTileCoords(new_world_x, new_world_y, width, height)
         
         -- 移除距离该位置 < 8 tiles 的合法坐标（确保主要建筑之间最小距离 >= 8 tiles）
         LandEdgeFinder.RemovePositionsNearby(new_tile_x, new_tile_y, 8)
