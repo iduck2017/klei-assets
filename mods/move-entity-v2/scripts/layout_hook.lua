@@ -1,4 +1,4 @@
-local PigkingHandler = require("pigking_handler")
+local PigkingHandler = require("layout_handler")
 local ProcessingState = require("processing_state")
 
 -- 复制 MinBoundingBox 函数（因为它是 object_layout.lua 中的 local 函数）
@@ -52,16 +52,21 @@ local function InstallLayoutHook()
             wrapped_world = original_world
         end
         
-        -- 设置标记，表示正在处理 layout（用于 prefab hook 排除 layout 中的 prefab）
-        ProcessingState.SetProcessing(true)
+        -- 只有在处理特殊 layout 时才设置标记（用于 prefab hook 排除 layout 中的 prefab）
+        local is_special_layout = PigkingHandler.ShouldMoveLayout(layout_name)
+        if is_special_layout then
+            ProcessingState.SetProcessing(true)
+        end
         
         -- 使用 pcall 确保即使出错也能清除标记
         local success, result = pcall(function()
             return original_ReserveAndPlaceLayout(node_id, layout, prefabs, add_entity, modified_position, wrapped_world)
         end)
         
-        -- 清除标记
-        ProcessingState.SetProcessing(false)
+        -- 清除标记（如果之前设置了）
+        if is_special_layout then
+            ProcessingState.SetProcessing(false)
+        end
         
         if success then
             return result

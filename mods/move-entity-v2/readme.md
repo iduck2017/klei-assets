@@ -3432,3 +3432,238 @@ end
 
 ---
 
+## 调研：不可拆除的建筑 Prefab
+
+### 问题描述
+
+用户询问哪些 prefab 是"不可拆除的建筑"，即玩家无法通过游戏内操作（如锤子、斧头等工具）拆除的建筑。
+
+### 判断标准
+
+根据源码 `src/physics.lua:147-164`，一个 prefab 是否可拆除取决于：
+1. 是否有 `workable` 组件
+2. `workable` 组件的 `work_action` 是否在 `COLLAPSIBLE_WORK_ACTIONS` 中（`HAMMER`, `MINE`, `CHOP`）
+3. `workable:CanBeWorked()` 是否返回 `true`
+
+### 源码分析结果
+
+#### 不可拆除的建筑
+
+1. **猪王 (`pigking`)** - `src/prefabs/pigking.lua`
+   - 没有 `workable` 组件
+   - **结论**: 完全不可拆除
+
+2. **宠物领取点 (`critterlab`)** - `src/prefabs/critterlab.lua`
+   - 没有 `workable` 组件
+   - **结论**: 完全不可拆除
+
+3. **多人传送门 (`multiplayer_portal`)**
+   - 需要进一步确认，但通常世界生成的关键建筑不可拆除
+
+4. **蜜蜂女王蜂巢 (`beequeenhive`)**
+   - 需要进一步确认
+
+5. **海象巢穴 (`walrus_camp`)**
+   - 需要进一步确认
+
+#### 特殊情况的建筑
+
+1. **池塘 (`pond`, `pond_mos`)** - `src/prefabs/pond.lua`
+   - 有 `workable` 组件，使用 `ACTIONS.MINE`
+   - 但默认 `workable:SetWorkable(false)`，表示默认不可工作
+   - 在特定条件下（如酸雨）会变为可工作
+   - **结论**: 通常不可拆除，特殊条件下可拆除
+
+### 当前 Mod 中的不可拆除建筑列表
+
+根据 `SPECIAL_LAYOUTS` 和 `SPECIAL_PREFABS` 列表，以下建筑**确认不可拆除**：
+
+**Layouts**:
+- `DefaultPigking` (猪王) - ✅ 确认不可拆除
+- `DragonflyArena` (龙蝇竞技场) - 需要确认
+- `MoonbaseOne` (月亮基地) - 需要确认
+- `Charlie1`, `Charlie2` (查理舞台) - 需要确认
+- `Oasis` (绿洲) - 需要确认
+- `junk_yard` (垃圾场) - 需要确认
+- `CaveEntrance` (洞穴入口) - 需要确认
+- `WormholeGrass` (虫洞) - 需要确认
+- `MooseNest` (麋鹿鹅生成器) - 需要确认
+- `ResurrectionStone` (复活石) - 需要确认
+- `Balatro` (小丑牌游戏机) - 需要确认
+
+**Prefabs**:
+- `multiplayer_portal` (多人传送门) - 需要确认
+- `beequeenhive` (蜜蜂女王蜂巢) - 需要确认
+- `critterlab` (宠物领取点) - ✅ 确认不可拆除
+- `walrus_camp` (海象巢穴) - 需要确认
+- `pond`, `pond_mos` (池塘) - ⚠️ 通常不可拆除，特殊条件下可拆除
+
+### 对 Mod 的影响
+
+**当前 Mod 不需要特殊处理**：
+- Mod 只负责在世界生成时移动这些建筑的位置
+- 建筑的"可拆除性"不影响移动逻辑
+- 移动后的建筑保持原有的可拆除属性
+
+### 相关文件
+
+- `src/physics.lua:138-164` - 判断 prefab 是否可拆除的逻辑
+- `src/prefabs/pigking.lua` - 猪王定义（无 workable 组件）
+- `src/prefabs/critterlab.lua` - 宠物领取点定义（无 workable 组件）
+- `src/prefabs/pond.lua` - 池塘定义（有 workable 组件，但默认不可工作）
+
+---
+
+## 调研：按排斥半径排序放置布局和 Prefab
+
+### 问题描述
+
+用户希望先放置排斥半径大的布局或实体，这样可以：
+1. 减少后续放置时的冲突
+2. 提高放置成功率
+3. 优化 `VALID_POSITIONS` 的使用效率
+
+### 源码分析
+
+#### 当前放置顺序
+
+**Layout 放置顺序** (`src/map/graphnode.lua:260-277`):
+```lua
+-- 在 Node:PopulateVoronoi 中
+if self.data.terrain_contents.countstaticlayouts ~= nil then
+    for k,count in pairs(self.data.terrain_contents.countstaticlayouts) do
+        for i=1, count do
+            obj_layout.Convert(self.id, k, add_fn)  -- 按字典顺序遍历
+        end
+    end
+end
+
+if self.data.terrain_contents_extra and self.data.terrain_contents_extra.static_layouts then
+    for i,layout in pairs(self.data.terrain_contents_extra.static_layouts) do
+        obj_layout.Convert(self.id, layout, add_fn)  -- 按数组顺序
+    end
+end
+```
+
+**Prefab 放置顺序** (`src/map/graphnode.lua:330-370`):
+- 通过 `PopulateVoronoi` 遍历节点
+- 每个节点内的 prefab 按配置顺序放置
+- 顺序取决于节点遍历顺序和节点内的 prefab 列表顺序
+
+**关键发现**:
+1. Layout 和 Prefab 的放置顺序是**固定的**，由世界生成配置决定
+2. 无法直接修改游戏引擎的放置顺序
+3. 需要在 Mod 层面实现排序逻辑
+
+### 实现方案
+
+#### 方案 1: 延迟处理 + 排序队列（推荐）
+
+**思路**:
+1. 在 `Convert` hook 中，如果是特殊布局，先不处理，加入延迟队列
+2. 在 `PopulateWorld_AddEntity` hook 中，如果是特殊 prefab，也加入延迟队列
+3. 在 `GlobalPostPopulate` 中，按排斥半径排序后统一处理
+
+**优点**:
+- 可以完全控制处理顺序
+- 不影响非特殊布局/prefab 的正常处理
+- 实现相对简单
+
+**缺点**:
+- 需要维护延迟队列
+- 需要确定"所有布局/prefab 处理完"的时机
+- 可能影响世界生成的时序
+
+**实现要点**:
+```lua
+-- 延迟队列
+local PENDING_LAYOUTS = {}
+local PENDING_PREFABS = {}
+
+-- 在 Convert hook 中
+if PigkingHandler.ShouldMoveLayout(layout_name) then
+    -- 获取排斥半径
+    local exclusion_radius = LAYOUT_EXCLUSION_RADIUS[string.lower(layout_name)] or 8
+    table.insert(PENDING_LAYOUTS, {
+        node_id = node_id,
+        layout = layout,
+        prefabs = prefabs,
+        addEntity = addEntity,
+        exclusion_radius = exclusion_radius,
+        layout_name = layout_name
+    })
+    return  -- 延迟处理
+end
+
+-- 在 GlobalPostPopulate 中
+-- 按排斥半径降序排序
+table.sort(PENDING_LAYOUTS, function(a, b)
+    return a.exclusion_radius > b.exclusion_radius
+end)
+
+-- 依次处理
+for _, pending in ipairs(PENDING_LAYOUTS) do
+    -- 处理布局...
+end
+```
+
+#### 方案 2: 两阶段处理
+
+**思路**:
+1. 第一阶段：Hook `PopulateVoronoi`，收集所有特殊布局/prefab，按排斥半径排序
+2. 第二阶段：按排序后的顺序调用 `ReserveAndPlaceLayout` 或 `PopulateWorld_AddEntity`
+
+**优点**:
+- 完全控制处理顺序
+- 不影响正常流程
+
+**缺点**:
+- 需要 Hook `PopulateVoronoi`，可能影响其他逻辑
+- 实现复杂度较高
+
+#### 方案 3: 实时优先级检查
+
+**思路**:
+1. 在每次 `Convert` 调用时，检查是否有更优先的布局还未处理
+2. 如果有，延迟当前布局，先处理更优先的
+3. 维护一个优先级队列
+
+**优点**:
+- 不需要等待所有布局收集完
+- 可以实时处理
+
+**缺点**:
+- 实现复杂，需要维护状态
+- 可能影响世界生成的时序
+
+### 推荐实现
+
+**推荐使用方案 1（延迟处理 + 排序队列）**:
+
+**理由**:
+1. **实现简单**: 只需要在现有 hook 中添加延迟逻辑
+2. **不影响正常流程**: 非特殊布局/prefab 正常处理
+3. **完全控制顺序**: 可以按排斥半径精确排序
+4. **时机明确**: `GlobalPostPopulate` 是明确的"所有布局处理完"的时机
+
+**实现步骤**:
+1. 创建延迟队列模块 `scripts/placement_queue.lua`
+2. 修改 `layout_hook.lua`，特殊布局加入队列
+3. 修改 `prefab_hook.lua`，特殊 prefab 加入队列
+4. 在 `GlobalPostPopulate` hook 中，排序并处理队列
+
+**注意事项**:
+- 需要确保 `GlobalPostPopulate` 在所有布局/prefab 处理完后调用
+- 需要处理队列为空的情况
+- 需要处理放置失败的情况（从队列中移除）
+
+### 相关文件
+
+- `src/map/graphnode.lua:260-277` - Layout 放置顺序
+- `src/map/graphnode.lua:330-370` - Prefab 放置顺序
+- `src/map/network.lua:770` - `GlobalPostPopulate` 调用时机
+- `mods/move-entity-v2/scripts/layout_hook.lua` - Layout Hook
+- `mods/move-entity-v2/scripts/prefab_hook.lua` - Prefab Hook
+
+---
+

@@ -6,18 +6,34 @@ local PigkingHandler = {}
 
 -- 需要应用移动逻辑的 layout 列表（不区分大小写）
 local SPECIAL_LAYOUTS = {
-    "DefaultPigking",           -- 猪王
-    "DragonflyArena",          -- 龙蝇竞技场
-    "MoonbaseOne",             -- 月亮基地
-    "Charlie1",                -- 查理舞台 1
-    "Charlie2",                -- 查理舞台 2
-    "Oasis",                   -- 绿洲
-    "junk_yard",               -- 垃圾场
-    "CaveEntrance",            -- 洞穴入口
-    "WormholeGrass",           -- 虫洞（基础类型）
-    "MooseNest",               -- 麋鹿鹅生成器
-    "ResurrectionStone",       -- 复活石（标准）
-    "Balatro",                 -- 小丑牌游戏机
+    "DefaultPigking",           -- 猪王 8
+    "DragonflyArena",          -- 龙蝇竞技场 12
+    "MoonbaseOne",             -- 月亮基地 8
+    "Charlie1",                -- 查理舞台-1 8
+    "Charlie2",                -- 查理舞台-2 4
+    "Oasis",                   -- 绿洲 12
+    "junk_yard",               -- 垃圾场 8
+    "CaveEntrance",            -- 洞穴入口 4
+    "WormholeGrass",           -- 虫洞（基础类型）4
+    "MooseNest",               -- 麋鹿鹅生成器 4
+    "ResurrectionStone",       -- 复活石（标准）4
+    "Balatro",                 -- 小丑牌游戏机 4
+}
+
+-- Layout 排斥半径映射表（layout 名称 -> 排斥半径）
+local LAYOUT_EXCLUSION_RADIUS = {
+    ["defaultpigking"] = 8,
+    ["dragonflyarena"] = 12,
+    ["moonbaseone"] = 8,
+    ["charlie1"] = 8,
+    ["charlie2"] = 4,
+    ["oasis"] = 12,
+    ["junk_yard"] = 8,
+    ["caveentrance"] = 4,
+    ["wormholegrass"] = 4,
+    ["moosenest"] = 4,
+    ["resurrectionstone"] = 4,
+    ["balatro"] = 4,
 }
 
 -- 判断是否是需要移动的特殊布局（精确匹配，不区分大小写）
@@ -98,12 +114,16 @@ function PigkingHandler.ProcessPosition(tx_or_position, ty_or_nil, layout_name, 
             if found then
                 found_valid = true
                 
-                -- 移除距离该位置 < 8 tiles 的合法坐标（确保主要建筑之间最小距离 >= 8 tiles）
-                LandEdgeFinder.RemovePositionsNearby(new_tx, new_ty, 8)
+                -- 根据 layout 名称获取排斥半径
+                local layout_name_lower = string.lower(layout_name)
+                local exclusion_radius = LAYOUT_EXCLUSION_RADIUS[layout_name_lower] or 8  -- 默认 8
+                
+                -- 移除距离该位置 < exclusion_radius tiles 的合法坐标
+                LandEdgeFinder.RemovePositionsNearby(new_tx, new_ty, exclusion_radius)
                 
             print(string.format(
-                    "[Move Entity V2] 🔧 修改布局 '%s' 坐标: tile (%d, %d) -> tile (%d, %d) [移动到合法位置，距离边缘 >= 6 tiles，距离其他主要建筑 >= 8 tiles]",
-                    layout_name, old_tx, old_ty, new_tx, new_ty
+                    "[Move Entity V2] 🔧 修改布局 '%s' 坐标: tile (%d, %d) -> tile (%d, %d) [移动到合法位置，距离边缘 >= 6 tiles，排斥半径 %d tiles]",
+                    layout_name, old_tx, old_ty, new_tx, new_ty, exclusion_radius
             ))
         else
             -- 未找到合法坐标，使用原始坐标
