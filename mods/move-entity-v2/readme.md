@@ -1278,6 +1278,562 @@ end
 
 ---
 
+## 调研：新增需要移动的元素（洞穴入口、虫洞、麋鹿鹅生成器、复活石、小丑牌游戏机）
+
+### 需求描述
+
+用户需要添加以下元素到移动列表中：
+1. **洞穴入口** (caveEntrance)
+2. **虫洞** (wormhole)
+3. **麋鹿鹅生成器** (moosegoose spawner)
+4. **复活石** (resurrection stone / touchstone)
+5. **小丑牌游戏机** (balatro machine / card game machine)
+
+用户要求优先使用 layout 形式移动。
+
+### 源码调研结果
+
+#### 1. 洞穴入口 (Cave Entrance)
+
+**Layout 名称**: `"CaveEntrance"`
+
+**源码位置**:
+- `src/map/layouts.lua:718` - Layout 定义
+- `src/map/static_layouts/cave_entrance.lua` - 静态布局文件
+- `src/prefabs/cave_entrance.lua` - Prefab 定义
+
+**Layout 信息**:
+- 包含 `cave_entrance` prefab
+- 用于连接主世界和洞穴世界
+
+**注意**: 只需要处理主世界的洞穴入口，不需要处理洞穴出口
+
+#### 2. 虫洞 (Wormhole)
+
+**Layout 名称**: `"WormholeGrass"`
+
+**源码位置**:
+- `src/map/layouts.lua:643` - Layout 定义
+- `src/prefabs/wormhole.lua` - Prefab 定义
+- `src/map/network.lua:850-885` - 虫洞配对逻辑
+
+**Layout 信息**:
+- 普通草地虫洞，最基本的虫洞类型
+- 虫洞通常成对出现，通过 `teleporter` 组件连接
+
+**注意**: 只需要处理最基本的 `WormholeGrass`，不需要处理其他变体（疯狂虫洞、理智虫洞等）
+
+#### 3. 麋鹿鹅生成器 (Moose Goose Spawner)
+
+**Layout 名称**: `"MooseNest"`
+
+**源码位置**:
+- `src/map/layouts.lua:891` - Layout 定义
+- `src/map/static_layouts/moose_nest.lua` - 静态布局文件
+- `src/prefabs/mooseegg.lua` - 包含 `moose_nesting_ground` prefab
+- `src/components/moosespawner.lua` - 生成器组件
+
+**Layout 信息**:
+- 包含 `moose_nesting_ground` prefab（麋鹿鹅巢穴）
+- 在春季时通过 `moosespawner` 组件生成麋鹿鹅
+- 布局中可能包含随机树木
+
+**相关 Prefab**:
+- `moose_nesting_ground` - 巢穴 prefab（在 layout 中）
+- `moose` - 麋鹿鹅（运行时生成）
+- `mooseegg` - 麋鹿鹅蛋（运行时生成）
+
+#### 4. 复活石 (Resurrection Stone / Touchstone)
+
+**Layout 名称**: 多个 Layout 变体
+
+**源码位置**:
+- `src/map/layouts.lua:264-266` - Layout 定义
+- `src/map/static_layouts/resurrectionstone.lua` - 静态布局文件
+- `src/prefabs/resurrectionstone.lua` - Prefab 定义
+
+**Layout 列表**:
+- `"ResurrectionStone"` - 标准复活石
+- `"ResurrectionStoneLit"` - 已激活的复活石
+- `"ResurrectionStoneWinter"` - 冬季复活石
+
+**Layout 信息**:
+- 所有变体都包含 `resurrectionstone` prefab
+- 复活石有激活/未激活状态，通过 `cooldown` 组件管理
+
+**相关配置**:
+- 在世界生成设置中称为 `"touchstone"`
+- 在 `tasksets/forest.lua` 和 `tasksets/caves.lua` 中配置数量
+
+#### 5. 小丑牌游戏机 (Balatro Machine)
+
+**Layout 名称**: `"Balatro"`
+
+**源码位置**:
+- `src/map/layouts.lua:445` - Layout 定义
+- `src/map/static_layouts/balatro.lua` - 静态布局文件
+- `src/prefabs/balatro_machine.lua` - Prefab 定义
+- `src/map/maptags.lua:129` - 通过 `Balatro_Spawner` 标签生成
+
+**Layout 信息**:
+- 包含 `balatro_machine` prefab
+- 包含 `balatro_card_area` 区域，随机生成 `playing_card` prefab
+- 通过世界生成标签 `Balatro_Spawner` 控制生成
+
+**相关配置**:
+- 在世界生成设置中称为 `"balatro"`
+- 可以通过世界生成设置禁用
+
+### 实现建议
+
+#### Layout 列表更新
+
+所有元素都**以 Layout 形式存在**，可以直接添加到 `SPECIAL_LAYOUTS` 列表：
+
+```lua
+local SPECIAL_LAYOUTS = {
+    -- 现有布局...
+    "DefaultPigking",
+    "DragonflyArena",
+    -- ...
+    
+    -- 新增布局
+    "CaveEntrance",              -- 洞穴入口（仅主世界入口）
+    "WormholeGrass",              -- 虫洞（基础类型）
+    "MooseNest",                 -- 麋鹿鹅生成器
+    "ResurrectionStone",         -- 复活石（标准）
+    "ResurrectionStoneLit",     -- 复活石（已激活）
+    "ResurrectionStoneWinter",   -- 复活石（冬季）
+    "Balatro",                   -- 小丑牌游戏机
+}
+```
+
+#### 注意事项
+
+1. **洞穴入口**: 只需要处理主世界的 `CaveEntrance`，不需要处理洞穴世界的 `CaveExit`
+
+2. **虫洞**: 只需要处理最基本的 `WormholeGrass`，不需要处理其他变体（疯狂虫洞、理智虫洞等）
+
+3. **复活石变体**: 复活石有 3 个 Layout 变体，建议全部添加以确保所有类型的复活石都能被移动
+
+4. **虫洞配对**: 虫洞通常成对出现，移动时需要注意配对逻辑，但基本的 Layout Hook 应该已经能够处理
+
+5. **麋鹿鹅生成器**: `MooseNest` 布局包含 `moose_nesting_ground` prefab，移动布局即可移动生成器
+
+6. **小丑牌游戏机**: `Balatro` 布局通过世界生成标签控制，移动布局即可移动游戏机
+
+### 待实现
+
+- [ ] 将上述 Layout 名称添加到 `SPECIAL_LAYOUTS` 列表
+  - `"CaveEntrance"` - 洞穴入口（仅主世界）
+  - `"WormholeGrass"` - 虫洞（基础类型）
+  - `"MooseNest"` - 麋鹿鹅生成器
+  - `"ResurrectionStone"` - 复活石（标准）
+  - `"ResurrectionStoneLit"` - 复活石（已激活）
+  - `"ResurrectionStoneWinter"` - 复活石（冬季）
+  - `"Balatro"` - 小丑牌游戏机
+- [ ] 测试每个 Layout 的移动是否正常工作
+- [ ] 验证虫洞配对是否仍然正常（如果虫洞被移动）
+- [ ] 验证复活石的不同变体是否都能正确移动
+- [ ] 验证麋鹿鹅生成器移动后，麋鹿鹅生成逻辑是否正常
+
+### 相关文件
+
+- `src/map/layouts.lua` - 所有 Layout 定义
+- `src/map/static_layouts/` - 静态布局文件目录
+- `mods/move-entity-v2/scripts/pigking_handler.lua` - 需要更新的文件
+
+---
+
+## 调研：池塘的距离排斥规则
+
+### 需求描述
+
+用户需要添加池塘到移动列表中，但有以下特殊要求：
+1. **池塘需要遵循距离排斥规则**：池塘需要距离主要建筑 >= 8 tiles
+2. **池塘彼此之间不需要互相排斥**：池塘放置后，不需要删除周围的 validpos，允许池塘彼此靠近
+
+### 源码调研结果
+
+#### 池塘的放置方式
+
+**主要方式：通过 Prefab 直接放置**
+
+池塘主要通过 room 的 `countprefabs` 直接放置，而不是通过 layout：
+
+**源码位置**:
+- `src/prefabs/pond.lua` - 池塘 prefab 定义
+- `src/map/rooms/forest/pigs.lua:129-144` - `Pondopolis` 房间示例
+
+**Prefab 类型**:
+- `"pond"` - 普通池塘（青蛙池塘）
+- `"pond_mos"` - 蚊子池塘
+- `"pond_cave"` - 洞穴池塘
+
+**放置示例**:
+```lua
+-- src/map/rooms/forest/pigs.lua
+AddRoom("Pondopolis", {
+    contents = {
+        countprefabs = {
+            pond = function () return 5 + math.random(3) end
+        },
+    }
+})
+```
+
+#### Layout 中的池塘
+
+虽然有一些包含池塘的 layout，但池塘本身主要是通过 prefab 放置的：
+
+**相关 Layout**:
+- `"DeciduousPond"` - 落叶池塘布局（但布局中不包含池塘 prefab，只有树和花）
+- `"PondSinkhole"` - 池塘天坑布局（包含 `pondarea` 区域，但池塘是通过区域函数生成的）
+
+**结论**: 池塘主要通过 prefab hook 处理，而不是 layout hook。
+
+### 实现方案
+
+#### 1. 添加到 SPECIAL_PREFABS 列表
+
+需要将池塘 prefab 添加到 `SPECIAL_PREFABS` 列表中：
+
+```lua
+-- prefab_handler.lua
+local SPECIAL_PREFABS = {
+    -- 现有 prefab...
+    "pond",        -- 普通池塘
+    "pond_mos",    -- 蚊子池塘
+    "pond_cave",   -- 洞穴池塘
+}
+```
+
+#### 2. 修改距离排斥逻辑
+
+**关键点**: 池塘需要距离主要建筑 >= 8 tiles，但池塘彼此之间不需要互相排斥。
+
+**实现方式**:
+1. 池塘放置后，**不调用** `RemovePositionsNearby` 来删除周围的 validpos
+2. 但池塘仍然会从 `VALID_POSITIONS` 中查找位置，确保距离主要建筑 >= 8 tiles
+
+**代码修改**:
+- 在 `prefab_handler.lua` 的 `ProcessPrefabPosition` 函数中，添加一个判断：
+  - 如果是池塘 prefab，找到合法位置后，**不调用** `RemovePositionsNearby`
+  - 如果是主要建筑（layout 或其他 prefab），找到合法位置后，**调用** `RemovePositionsNearby`
+
+#### 3. 区分"主要建筑"和"池塘"
+
+**方案 A: 在 prefab_handler 中添加判断**
+
+```lua
+-- prefab_handler.lua
+local POND_PREFABS = {
+    "pond",
+    "pond_mos",
+    "pond_cave",
+}
+
+function PrefabHandler.IsPondPrefab(prefab)
+    if not prefab then
+        return false
+    end
+    for _, pond_prefab in ipairs(POND_PREFABS) do
+        if prefab == pond_prefab then
+            return true
+        end
+    end
+    return false
+end
+
+function PrefabHandler.ProcessPrefabPosition(prefab, tile_x, tile_y, width, height, world)
+    -- ... 查找合法位置 ...
+    
+    if found_valid then
+        -- 只有非池塘的 prefab 才需要删除周围的 validpos
+        if not PrefabHandler.IsPondPrefab(prefab) then
+            LandEdgeFinder.RemovePositionsNearby(new_tile_x, new_tile_y, 8)
+        end
+        
+        -- ... 日志输出 ...
+    end
+end
+```
+
+**方案 B: 在 pigking_handler 中添加判断**
+
+类似地，在 `pigking_handler.lua` 中也可以添加判断，但 layout 中通常不包含池塘，所以主要是在 prefab_handler 中处理。
+
+### 注意事项
+
+1. **池塘类型**: 需要处理所有三种池塘类型（`pond`, `pond_mos`, `pond_cave`）
+
+2. **距离计算**: 池塘仍然需要距离主要建筑 >= 8 tiles，只是池塘彼此之间不需要互相排斥
+
+3. **VALID_POSITIONS 的影响**: 
+   - 当主要建筑放置后，会删除周围 8 tiles 的 validpos
+   - 池塘放置后，不会删除周围的 validpos
+   - 这意味着池塘可以彼此靠近，但不会靠近主要建筑
+
+4. **查找逻辑**: 池塘在查找合法位置时，仍然使用 `FindNearestValidPosition`，这会确保找到的位置距离主要建筑 >= 8 tiles（因为主要建筑周围的 validpos 已被删除）
+
+### 待实现
+
+- [ ] 将 `"pond"`, `"pond_mos"`, `"pond_cave"` 添加到 `SPECIAL_PREFABS` 列表
+- [ ] 在 `prefab_handler.lua` 中添加 `IsPondPrefab` 函数
+- [ ] 修改 `ProcessPrefabPosition` 函数，池塘放置后不调用 `RemovePositionsNearby`
+- [ ] 测试池塘是否能够正确移动到距离主要建筑 >= 8 tiles 的位置
+- [ ] 测试池塘彼此之间是否可以靠近（距离 < 8 tiles）
+
+### 相关文件
+
+- `src/prefabs/pond.lua` - 池塘 prefab 定义
+- `src/map/rooms/forest/pigs.lua` - 池塘放置示例
+- `mods/move-entity-v2/scripts/prefab_handler.lua` - 需要更新的文件
+
+---
+
+## 调研：排除 Layout 中的池塘 Prefab
+
+### 需求描述
+
+用户发现一个问题：池塘不能是 moosegoose 池塘。也就是说，在检查 prefab 是否是池塘时，需要排除 layout 里面的对象。
+
+**问题场景**：
+- `MooseNest` layout 中包含 `pond` prefab（见 `src/map/static_layouts/moose_nest.lua:65`）
+- 如果池塘是作为 layout 的一部分放置的，它不应该被 prefab hook 处理（因为 layout 已经通过 layout hook 整体移动了）
+- 只有通过 room 的 `countprefabs` 直接放置的池塘才应该被 prefab hook 处理
+
+### 源码分析
+
+#### 1. Layout 中的 Prefab 放置流程
+
+**Layout 放置流程**：
+```
+obj_layout.Convert()
+  → obj_layout.ReserveAndPlaceLayout()
+    → add_entity.fn(prefab, ...)  // add_entity.fn = Node:AddEntity
+      → PopulateWorld_AddEntity(prefab, ...)
+```
+
+**直接放置流程**：
+```
+Node:PopulateVoronoi()
+  → PopulateWorld_AddEntity(prefab, ...)
+```
+
+**关键发现**：
+- 两种方式最终都调用 `PopulateWorld_AddEntity`
+- Layout 中的 prefab 通过 `add_entity.fn`（即 `Node:AddEntity`）调用
+- 直接放置的 prefab 直接调用 `PopulateWorld_AddEntity`
+
+#### 2. 区分方案
+
+**方案 1: 使用全局标记（推荐）**
+
+**思路**：
+- 在 layout hook 中，当处理 layout 时，设置一个全局标记
+- 在 prefab hook 中检查这个标记，如果正在处理 layout，则跳过该 prefab
+
+**实现**：
+```lua
+-- layout_hook.lua
+obj_layout.ReserveAndPlaceLayout = function(node_id, layout, prefabs, add_entity, position, world)
+    -- 设置全局标记，表示正在处理 layout
+    _G.move_entity_v2_processing_layout = true
+    
+    local result = original_ReserveAndPlaceLayout(node_id, layout, prefabs, add_entity, position, world)
+    
+    -- 清除标记
+    _G.move_entity_v2_processing_layout = false
+    
+    return result
+end
+
+-- prefab_hook.lua
+_G.PopulateWorld_AddEntity = function(prefab, tile_x, tile_y, ...)
+    -- 如果正在处理 layout，跳过 prefab hook
+    if _G.move_entity_v2_processing_layout then
+        return original_PopulateWorld_AddEntity(prefab, tile_x, tile_y, ...)
+    end
+    
+    -- 正常处理 prefab
+    if PrefabHandler.ShouldMovePrefab(prefab) then
+        -- ...
+    end
+end
+```
+
+**优点**：
+- 实现简单
+- 不需要修改 `prefab_data` 或调用链
+- 逻辑清晰
+
+**缺点**：
+- 使用全局变量，需要注意线程安全（但 DST 是单线程的，所以问题不大）
+- 如果 `ReserveAndPlaceLayout` 抛出异常，标记可能不会被清除（需要 try-finally 或 pcall）
+
+**方案 2: 在 prefab_data 中添加标记**
+
+**思路**：
+- 在 layout hook 中，修改 `add_entity.fn`，在调用时添加标记到 `prefab_data`
+- 在 prefab hook 中检查 `prefab_data` 是否有标记
+
+**实现**：
+```lua
+-- layout_hook.lua
+local function wrap_add_entity(original_add_entity, layout_name)
+    return {
+        fn = function(prefab, points_x, points_y, current_pos_idx, entitiesOut, width, height, prefab_list, prefab_data, rand_offset)
+            -- 在 prefab_data 中添加标记
+            if not prefab_data then
+                prefab_data = {}
+            end
+            prefab_data._from_layout = layout_name
+            
+            return original_add_entity.fn(prefab, points_x, points_y, current_pos_idx, entitiesOut, width, height, prefab_list, prefab_data, rand_offset)
+        end,
+        args = original_add_entity.args
+    }
+end
+
+-- prefab_hook.lua
+_G.PopulateWorld_AddEntity = function(prefab, tile_x, tile_y, tile_value, entitiesOut, width, height, prefab_list, prefab_data, rand_offset)
+    -- 如果 prefab_data 中有 _from_layout 标记，说明来自 layout，跳过
+    if prefab_data and prefab_data._from_layout then
+        return original_PopulateWorld_AddEntity(prefab, tile_x, tile_y, tile_value, entitiesOut, width, height, prefab_list, prefab_data, rand_offset)
+    end
+    
+    -- 正常处理 prefab
+    if PrefabHandler.ShouldMovePrefab(prefab) then
+        -- ...
+    end
+end
+```
+
+**优点**：
+- 不依赖全局变量
+- 可以知道 prefab 来自哪个 layout（用于调试）
+
+**缺点**：
+- 需要修改 `add_entity` 对象，可能影响其他逻辑
+- 需要确保 `prefab_data` 表存在
+
+**方案 3: 检查调用栈**
+
+**思路**：
+- 使用 Lua 的 `debug` 库检查调用栈
+- 如果调用栈中包含 `ReserveAndPlaceLayout`，说明来自 layout
+
+**实现**：
+```lua
+-- prefab_hook.lua
+local function is_from_layout()
+    local info = debug.getinfo(3, "n")
+    if info then
+        return info.name == "ReserveAndPlaceLayout"
+    end
+    return false
+end
+
+_G.PopulateWorld_AddEntity = function(prefab, tile_x, tile_y, ...)
+    -- 检查是否来自 layout
+    if is_from_layout() then
+        return original_PopulateWorld_AddEntity(prefab, tile_x, tile_y, ...)
+    end
+    
+    -- 正常处理 prefab
+    if PrefabHandler.ShouldMovePrefab(prefab) then
+        -- ...
+    end
+end
+```
+
+**优点**：
+- 不需要修改其他代码
+- 自动检测
+
+**缺点**：
+- 依赖 `debug` 库，可能在某些环境中不可用
+- 性能开销（每次调用都检查调用栈）
+- 调用栈深度需要调整（可能不稳定）
+
+### 推荐实现
+
+**推荐使用方案 1（全局标记）**：
+
+**理由**：
+1. **实现简单**：只需要在 layout hook 中设置和清除标记
+2. **性能好**：只是一个布尔值检查
+3. **逻辑清晰**：明确表示"正在处理 layout"
+4. **兼容性好**：不依赖 `debug` 库或修改 `prefab_data`
+
+**实现要点**：
+1. 在 `layout_hook.lua` 的 `ReserveAndPlaceLayout` hook 中设置和清除全局标记
+2. 使用 `pcall` 确保即使出错也能清除标记
+3. 在 `prefab_hook.lua` 中检查标记，如果正在处理 layout，直接跳过
+
+**代码示例**：
+```lua
+-- layout_hook.lua
+obj_layout.ReserveAndPlaceLayout = function(node_id, layout, prefabs, add_entity, position, world)
+    -- 设置全局标记
+    _G.move_entity_v2_processing_layout = true
+    
+    -- 使用 pcall 确保即使出错也能清除标记
+    local success, result = pcall(function()
+        return original_ReserveAndPlaceLayout(node_id, layout, prefabs, add_entity, position, world)
+    end)
+    
+    -- 清除标记
+    _G.move_entity_v2_processing_layout = false
+    
+    if success then
+        return result
+    else
+        error(result)  -- 重新抛出错误
+    end
+end
+
+-- prefab_hook.lua
+_G.PopulateWorld_AddEntity = function(prefab, tile_x, tile_y, tile_value, entitiesOut, width, height, prefab_list, prefab_data, rand_offset)
+    -- 如果正在处理 layout，跳过 prefab hook（layout 已经通过 layout hook 处理）
+    if _G.move_entity_v2_processing_layout then
+        return original_PopulateWorld_AddEntity(prefab, tile_x, tile_y, tile_value, entitiesOut, width, height, prefab_list, prefab_data, rand_offset)
+    end
+    
+    -- 正常处理 prefab
+    if PrefabHandler.ShouldMovePrefab(prefab) then
+        -- ...
+    end
+end
+```
+
+### 注意事项
+
+1. **异常处理**：使用 `pcall` 确保即使 `ReserveAndPlaceLayout` 抛出异常，标记也能被清除
+
+2. **嵌套 Layout**：如果 layout 中嵌套调用其他 layout（理论上不应该发生），全局标记仍然有效
+
+3. **线程安全**：DST 是单线程的，所以全局变量是安全的
+
+4. **性能影响**：全局标记检查的性能开销可以忽略不计
+
+### 待实现
+
+- [ ] 在 `layout_hook.lua` 的 `ReserveAndPlaceLayout` hook 中添加全局标记设置和清除
+- [ ] 在 `prefab_hook.lua` 中添加标记检查，跳过来自 layout 的 prefab
+- [ ] 测试 `MooseNest` layout 中的池塘是否被正确排除
+- [ ] 测试直接放置的池塘是否仍然被正确处理
+
+### 相关文件
+
+- `src/map/static_layouts/moose_nest.lua` - `MooseNest` layout 定义（包含 `pond` prefab）
+- `src/map/object_layout.lua:481` - Layout 中 prefab 的调用位置
+- `mods/move-entity-v2/scripts/layout_hook.lua` - 需要修改的文件
+- `mods/move-entity-v2/scripts/prefab_hook.lua` - 需要修改的文件
+
+---
+
 ## 调研：单个 Prefab 的移动劫持方案
 
 **需求**: 对于通过 room 的 `countprefabs` 直接放置的 prefab（如 `beequeenhive`），需要调研如何 hook 它们的放置过程以实现移动。

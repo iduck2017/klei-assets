@@ -6,13 +6,18 @@ local PigkingHandler = {}
 
 -- 需要应用移动逻辑的 layout 列表（不区分大小写）
 local SPECIAL_LAYOUTS = {
-    "DefaultPigking",      -- 猪王
-    "DragonflyArena",      -- 龙蝇竞技场
-    "MoonbaseOne",         -- 月亮基地
-    "Charlie1",            -- 查理舞台 1
-    "Charlie2",            -- 查理舞台 2
-    "Oasis",               -- 绿洲
-    "junk_yard",           -- 垃圾场
+    "DefaultPigking",           -- 猪王
+    "DragonflyArena",          -- 龙蝇竞技场
+    "MoonbaseOne",             -- 月亮基地
+    "Charlie1",                -- 查理舞台 1
+    "Charlie2",                -- 查理舞台 2
+    "Oasis",                   -- 绿洲
+    "junk_yard",               -- 垃圾场
+    "CaveEntrance",            -- 洞穴入口
+    "WormholeGrass",           -- 虫洞（基础类型）
+    "MooseNest",               -- 麋鹿鹅生成器
+    "ResurrectionStone",       -- 复活石（标准）
+    "Balatro",                 -- 小丑牌游戏机
 }
 
 -- 判断是否是需要移动的特殊布局（精确匹配，不区分大小写）

@@ -1,6 +1,7 @@
 -- Prefab Hook 模块：劫持 PopulateWorld_AddEntity 以修改特殊 prefab 的坐标
 
 local PrefabHandler = require("prefab_handler")
+local ProcessingState = require("processing_state")
 
 local function InstallPrefabHook()
     -- 加载 graphnode 模块以确保 PopulateWorld_AddEntity 已定义
@@ -16,6 +17,14 @@ local function InstallPrefabHook()
     
     -- Hook PopulateWorld_AddEntity
     _G.PopulateWorld_AddEntity = function(prefab, tile_x, tile_y, tile_value, entitiesOut, width, height, prefab_list, prefab_data, rand_offset)
+        -- 如果正在处理 layout，跳过 prefab hook（layout 已经通过 layout hook 整体处理了）
+        -- 这样可以避免 layout 中的 prefab（如 MooseNest 中的 pond）被重复处理
+        if ProcessingState.IsProcessing() then
+            return original_PopulateWorld_AddEntity(
+                prefab, tile_x, tile_y, tile_value, entitiesOut, width, height, prefab_list, prefab_data, rand_offset
+            )
+        end
+        
         -- 检查是否是特殊 prefab
         if PrefabHandler.ShouldMovePrefab(prefab) then
             -- 处理坐标

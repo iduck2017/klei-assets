@@ -1,4 +1,5 @@
 local PigkingHandler = require("pigking_handler")
+local ProcessingState = require("processing_state")
 
 -- 复制 MinBoundingBox 函数（因为它是 object_layout.lua 中的 local 函数）
 local function MinBoundingBox(items)
@@ -51,7 +52,22 @@ local function InstallLayoutHook()
             wrapped_world = original_world
         end
         
-        return original_ReserveAndPlaceLayout(node_id, layout, prefabs, add_entity, modified_position, wrapped_world)
+        -- 设置标记，表示正在处理 layout（用于 prefab hook 排除 layout 中的 prefab）
+        ProcessingState.SetProcessing(true)
+        
+        -- 使用 pcall 确保即使出错也能清除标记
+        local success, result = pcall(function()
+            return original_ReserveAndPlaceLayout(node_id, layout, prefabs, add_entity, modified_position, wrapped_world)
+        end)
+        
+        -- 清除标记
+        ProcessingState.SetProcessing(false)
+        
+        if success then
+            return result
+        else
+            error(result)  -- 重新抛出错误
+        end
     end
     
     obj_layout.Convert = function(node_id, item, addEntity)
@@ -132,9 +148,13 @@ local function InstallLayoutHook()
             end
             
             -- new_tx, new_ty 已经是布局中心点（tile 坐标）
-            -- ReserveAndPlaceLayout 期望 position 是保留区域的左下角（角落）
+            -- ReserveAndPlaceLayout 期望 position 是保留区域的左下角（角落，整数 tile 坐标）
             -- 保留区域的左下角 = 布局中心点 - size - 0.5
-            local position = {new_tx - size - 0.5, new_ty - size - 0.5}
+            -- 注意：SetTile 需要整数 tile 坐标，所以需要向下取整
+            local position = {
+                math.floor(new_tx - size - 0.5),  -- 向下取整到整数 tile 坐标
+                math.floor(new_ty - size - 0.5)   -- 向下取整到整数 tile 坐标
+            }
             
             -- 记录布局名称和位置（布局中心点）
             print(string.format(
