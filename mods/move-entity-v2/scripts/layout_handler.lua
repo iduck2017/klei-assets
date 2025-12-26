@@ -26,14 +26,13 @@ local LAYOUT_EXCLUSION_RADIUS = {
     ["dragonflyarena"] = 12,
     ["moonbaseone"] = 8,
     ["charlie1"] = 8,
-    ["charlie2"] = 4,
-    ["oasis"] = 12,
+    ["oasis"] = 8,
     ["junk_yard"] = 8,
-    ["caveentrance"] = 4,
-    ["wormholegrass"] = 4,
-    ["moosenest"] = 4,
-    ["resurrectionstone"] = 4,
-    ["balatro"] = 4,
+    ["caveentrance"] = 8,
+    ["wormholegrass"] = 8,
+    ["moosenest"] = 8,
+    ["resurrectionstone"] = 8,
+    ["balatro"] = 8,
 }
 
 -- 判断是否是需要移动的特殊布局（精确匹配，不区分大小写）

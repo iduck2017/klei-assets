@@ -402,5 +402,8 @@ end
 LandEdgeFinder.TileToWorldCoords = TileToWorldCoords
 LandEdgeFinder.WorldToTileCoords = WorldToTileCoords
 
+-- 导出 DistanceToEdge 函数供其他模块使用
+LandEdgeFinder.DistanceToEdge = DistanceToEdge
+
 return LandEdgeFinder
 

@@ -1,5 +1,5 @@
 -- 地皮替换 Hook 模块
--- 功能：在世界生成完成后替换所有有效坐标的地皮为木板地皮
+-- 功能：在世界生成完成后替换所有有效坐标的地皮为红色大理石路
 -- 这是一个独立的模块，不与其他逻辑耦合
 -- Hook GlobalPostPopulate，在世界生成完成后执行
 
@@ -35,7 +35,7 @@ local function InstallTurfReplacerHook()
         -- 在世界生成完成后替换地皮（只针对根节点）
         -- 注意：不需要 turf_replaced 检查，因为：
         -- 1. GlobalPostPopulate 在每次成功的生成尝试中只被调用一次
-        -- 2. ReplaceSingleTile 中已有检查：如果地皮已经是 WOODFLOOR，会跳过
+        -- 2. ReplaceSingleTile 中已有检查：如果地皮已经是 MOSAIC_RED，会跳过
         if self.parent == nil then
             local valid_count = LandEdgeFinder.GetValidPositionsCount()
             if valid_count > 0 then
@@ -44,7 +44,7 @@ local function InstallTurfReplacerHook()
                     print("[Move Entity V2] [TurfReplacerHook] 检测到世界生成完成，开始替换地皮...")
                     local valid_positions = LandEdgeFinder.GetValidPositions()
                     if valid_positions and #valid_positions > 0 then
-                        TurfReplacer.ReplaceValidPositionsWithWoodFloor(world, valid_positions)
+                        TurfReplacer.ReplaceValidPositionsWithMosaicRed(world, valid_positions)
                         print("[Move Entity V2] [TurfReplacerHook] 地皮替换完成")
                     end
                 end

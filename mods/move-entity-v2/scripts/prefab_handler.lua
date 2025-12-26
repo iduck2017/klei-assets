@@ -23,10 +23,10 @@ local PREFAB_EXCLUSION_RADIUS = {
     ["multiplayer_portal"] = 8,
     ["beequeenhive"] = 8,
     ["critterlab"] = 8,
-    ["walrus_camp"] = 4,
-    ["hotspring"] = 2,
-    ["pond"] = 2,
-    ["pond_mos"] = 2,
+    ["walrus_camp"] = 8,
+    ["hotspring"] = 3,
+    ["pond"] = 3,
+    ["pond_mos"] = 3
 }
 
 -- 池塘 prefab 列表（池塘彼此之间不需要互相排斥）
