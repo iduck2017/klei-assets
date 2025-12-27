@@ -22,17 +22,18 @@ local SPECIAL_LAYOUTS = {
 
 -- Layout 排斥半径映射表（layout 名称 -> 排斥半径）
 local LAYOUT_EXCLUSION_RADIUS = {
-    ["defaultpigking"] = 8,
-    ["dragonflyarena"] = 12,
-    ["moonbaseone"] = 8,
-    ["charlie1"] = 8,
-    ["oasis"] = 8,
-    ["junk_yard"] = 8,
-    ["caveentrance"] = 8,
-    ["wormholegrass"] = 8,
-    ["moosenest"] = 8,
-    ["resurrectionstone"] = 8,
-    ["balatro"] = 8,
+    ["defaultpigking"] = 5,
+    ["dragonflyarena"] = 9,
+    ["moonbaseone"] = 5,
+    ["charlie1"] = 3,
+    ["charlie2"] = 2,
+    ["oasis"] = 7,
+    ["junk_yard"] = 5,
+    ["caveentrance"] = 2,
+    ["wormholegrass"] = 2,
+    ["moosenest"] = 2,
+    ["resurrectionstone"] = 2,
+    ["balatro"] = 2,
 }
 
 -- 判断是否是需要移动的特殊布局（精确匹配，不区分大小写）
@@ -106,18 +107,19 @@ function PigkingHandler.ProcessPosition(tx_or_position, ty_or_nil, layout_name, 
             new_tx = old_tx
             new_ty = old_ty
         else
+            -- 根据 layout 名称获取排斥半径
+            local layout_name_lower = string.lower(layout_name)
+            local exclusion_radius = LAYOUT_EXCLUSION_RADIUS[layout_name_lower] or 8  -- 默认 8
+            
             -- 直接使用 tile 坐标查找最近的合法坐标（避免不必要的坐标转换）
+            -- 传入 exclusion_radius 参数，基于 DISTANCE_MAP 进行距离检查
             local found
-            new_tx, new_ty, found = LandEdgeFinder.FindNearestValidPosition(old_tx, old_ty, world)
+            new_tx, new_ty, found = LandEdgeFinder.FindNearestValidPosition(old_tx, old_ty, world, exclusion_radius)
         
             if found then
                 found_valid = true
                 
-                -- 根据 layout 名称获取排斥半径
-                local layout_name_lower = string.lower(layout_name)
-                local exclusion_radius = LAYOUT_EXCLUSION_RADIUS[layout_name_lower] or 8  -- 默认 8
-                
-                -- 移除距离该位置 < exclusion_radius tiles 的合法坐标
+                -- 移除距离该位置 < exclusion_radius tiles 的合法坐标，并更新 DISTANCE_MAP
                 LandEdgeFinder.RemovePositionsNearby(new_tx, new_ty, exclusion_radius)
                 
             print(string.format(

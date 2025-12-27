@@ -7,6 +7,9 @@ InstallLayoutHook()
 local InstallPrefabHook = require("prefab_hook")
 InstallPrefabHook()
 
-local InstallTurfReplacerHook = require("turf_replacer_hook")
-InstallTurfReplacerHook()
+-- local InstallTurfReplacerHook = require("turf_replacer_hook")
+-- InstallTurfReplacerHook()
+
+local InstallSignPlacerHook = require("sign_placer_hook")
+InstallSignPlacerHook()
 

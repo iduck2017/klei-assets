@@ -20,13 +20,13 @@ local SPECIAL_PREFABS = {
 
 -- Prefab 排斥半径映射表（prefab 名称 -> 排斥半径）
 local PREFAB_EXCLUSION_RADIUS = {
-    ["multiplayer_portal"] = 8,
-    ["beequeenhive"] = 8,
-    ["critterlab"] = 8,
-    ["walrus_camp"] = 8,
-    ["hotspring"] = 3,
-    ["pond"] = 3,
-    ["pond_mos"] = 3
+    ["multiplayer_portal"] = 5,
+    ["beequeenhive"] = 5,
+    ["critterlab"] = 5,
+    ["walrus_camp"] = 2,
+    ["hotspring"] = 1,
+    ["pond"] = 1,
+    ["pond_mos"] = 1
 }
 
 -- 池塘 prefab 列表（池塘彼此之间不需要互相排斥）
@@ -75,15 +75,16 @@ function PrefabHandler.ProcessPrefabPosition(prefab, tile_x, tile_y, width, heig
         return tile_x, tile_y, false
     end
     
+    -- 根据 prefab 名称获取排斥半径
+    local prefab_name_lower = string.lower(prefab)
+    local exclusion_radius = PREFAB_EXCLUSION_RADIUS[prefab_name_lower] or 8  -- 默认 8
+    
     -- 直接使用 tile 坐标查找最近的合法坐标（避免不必要的坐标转换）
-    local new_tile_x, new_tile_y, found_valid = LandEdgeFinder.FindNearestValidPosition(tile_x, tile_y, world)
+    -- 传入 exclusion_radius 参数，基于 DISTANCE_MAP 进行距离检查
+    local new_tile_x, new_tile_y, found_valid = LandEdgeFinder.FindNearestValidPosition(tile_x, tile_y, world, exclusion_radius)
     
     if found_valid then
-        -- 根据 prefab 名称获取排斥半径
-        local prefab_name_lower = string.lower(prefab)
-        local exclusion_radius = PREFAB_EXCLUSION_RADIUS[prefab_name_lower] or 8  -- 默认 8
-        
-        -- 移除距离该位置 < exclusion_radius tiles 的合法坐标
+        -- 移除距离该位置 < exclusion_radius tiles 的合法坐标，并更新 DISTANCE_MAP
         LandEdgeFinder.RemovePositionsNearby(new_tile_x, new_tile_y, exclusion_radius)
         
         print(string.format(

@@ -3667,3 +3667,184 @@ end
 
 ---
 
+## 调研：基于 DISTANCE_MAP 实现 A+B 最小距离规则
+
+### 需求描述
+
+修改主要建筑之间的最小距离规则：**A 和 B 的最小距离应该是 A的EXCLUSION_RADIUS + B的EXCLUSION_RADIUS**。
+
+### 当前 DISTANCE_MAP 机制
+
+**当前实现**：
+- `DISTANCE_MAP` 存储每个陆地 tile 到海岸线或空洞的最小距离（曼哈顿距离）
+- 当调用 `RemovePositionsNearby(tile_x, tile_y, min_distance)` 时：
+  - 将 `min_distance` 范围内的 tile 距离设置为 0（制造空洞）
+  - 更新其他 tile 的距离为 `min(到海岸线距离, 到空洞边缘距离)`
+
+**数据结构**：
+```lua
+DISTANCE_MAP["x,y"] = distance  -- 到海岸线或空洞的最小距离
+```
+
+### 新方案设计
+
+#### 方案 1: 维护已放置对象列表 + DISTANCE_MAP 检查 ⭐ **推荐**
+
+**思路**：
+1. 维护 `PLACED_BUILDINGS` 列表，记录每个已放置对象的位置和排斥半径
+2. 在 `FindNearestValidPosition` 中：
+   - 检查候选位置的 `DISTANCE_MAP` 值
+   - 如果 `DISTANCE_MAP[tile] == 0`，说明在某个已放置对象的排斥区域内，跳过
+   - 如果 `DISTANCE_MAP[tile] > 0`，还需要检查与所有已放置对象的距离：
+     - 计算到每个已放置对象的曼哈顿距离
+     - 检查是否满足：`距离 >= (当前对象半径 + 已放置对象半径)`
+3. 找到合法位置后，调用 `RemovePositionsNearby` 更新 `DISTANCE_MAP`
+
+**优点**：
+- 利用 `DISTANCE_MAP` 快速排除空洞内的位置
+- 精确计算每个对象对的最小距离要求
+- 逻辑清晰，易于实现
+
+**缺点**：
+- 需要维护 `PLACED_BUILDINGS` 列表
+- 每次查找需要遍历所有已放置对象
+
+**实现要点**：
+```lua
+-- 已放置对象列表
+local PLACED_BUILDINGS = {
+    {
+        tile_x = 276,
+        tile_y = 270,
+        exclusion_radius = 12  -- DragonflyArena
+    },
+    {
+        tile_x = 200,
+        tile_y = 250,
+        exclusion_radius = 8   -- DefaultPigking
+    },
+    -- ...
+}
+
+-- 在 FindNearestValidPosition 中
+function LandEdgeFinder.FindNearestValidPosition(start_tx, start_ty, world, current_exclusion_radius)
+    current_exclusion_radius = current_exclusion_radius or 8
+    
+    for _, pos in ipairs(VALID_POSITIONS) do
+        -- 检查 DISTANCE_MAP
+        local key = pos.tx .. "," .. pos.ty
+        local dist_to_hole = DISTANCE_MAP[key]
+        
+        -- 如果距离为 0，说明在空洞内，跳过
+        if dist_to_hole == 0 then
+            goto continue
+        end
+        
+        -- 检查与所有已放置对象的距离
+        local valid = true
+        for _, building in ipairs(PLACED_BUILDINGS) do
+            local dx = math.abs(pos.tx - building.tile_x)
+            local dy = math.abs(pos.ty - building.tile_y)
+            local dist = dx + dy  -- 曼哈顿距离
+            
+            local min_dist = current_exclusion_radius + building.exclusion_radius
+            if dist < min_dist then
+                valid = false
+                break
+            end
+        end
+        
+        if valid then
+            return pos.tx, pos.ty, true
+        end
+        
+        ::continue::
+    end
+end
+```
+
+#### 方案 2: 修改 DISTANCE_MAP 存储到空洞中心的距离
+
+**思路**：
+1. 修改 `RemovePositionsNearby`，使 `DISTANCE_MAP` 存储到空洞中心的距离（而不是边缘）
+2. 在 `FindNearestValidPosition` 中：
+   - 如果 `DISTANCE_MAP[tile] == 0`，跳过
+   - 如果 `DISTANCE_MAP[tile] > 0`，需要知道空洞的半径才能计算最小距离要求
+
+**问题**：
+- `DISTANCE_MAP` 只存储距离，不存储空洞的半径
+- 无法区分不同半径的空洞
+- 需要额外的数据结构记录空洞半径
+
+**结论**：不推荐，实现复杂且不够灵活
+
+#### 方案 3: 仅使用 DISTANCE_MAP 的 0 值检查
+
+**思路**：
+1. 在 `FindNearestValidPosition` 中，只检查 `DISTANCE_MAP[tile] == 0` 的位置
+2. 如果 `DISTANCE_MAP[tile] > 0`，认为可以放置
+
+**问题**：
+- 无法精确控制 A+B 的最小距离规则
+- 只能保证不在空洞内，但无法保证满足最小距离要求
+
+**结论**：不推荐，无法满足需求
+
+### 推荐实现
+
+**推荐使用方案 1（维护已放置对象列表 + DISTANCE_MAP 检查）**：
+
+**理由**：
+1. **精确控制**：可以精确计算每个对象对的最小距离要求（A的半径 + B的半径）
+2. **性能优化**：利用 `DISTANCE_MAP` 快速排除空洞内的位置
+3. **逻辑清晰**：先检查 `DISTANCE_MAP`，再检查已放置对象距离
+4. **易于维护**：数据结构简单，逻辑直观
+
+**实现步骤**：
+1. 在 `land_edge_finder.lua` 中添加 `PLACED_BUILDINGS` 列表
+2. 添加 `AddPlacedBuilding(tile_x, tile_y, exclusion_radius)` 函数
+3. 修改 `FindNearestValidPosition`，添加 `current_exclusion_radius` 参数
+4. 在 `FindNearestValidPosition` 中实现距离检查逻辑
+5. 在 `layout_handler.lua` 和 `prefab_handler.lua` 中：
+   - 调用 `FindNearestValidPosition` 时传入当前对象的排斥半径
+   - 找到位置后，调用 `AddPlacedBuilding` 记录已放置对象
+   - 调用 `RemovePositionsNearby` 更新 `DISTANCE_MAP`
+
+### 注意事项
+
+1. **距离计算**：
+   - 使用曼哈顿距离：`|dx| + |dy|`
+   - 与 `DISTANCE_MAP` 的距离度量保持一致
+
+2. **边界情况**：
+   - 如果找不到满足距离要求的位置，应该：
+     - 记录警告日志
+     - 使用原始坐标（不移动）或只满足距离边缘 >= 6 的位置
+
+3. **性能考虑**：
+   - 如果已放置对象数量较多，查找时遍历所有对象可能影响性能
+   - 可以考虑使用空间索引优化（如四叉树）
+
+4. **向后兼容**：
+   - 如果某个对象没有定义排斥半径，使用默认值 8
+   - 确保所有特殊 layout 和 prefab 都有排斥半径定义
+
+### 待实现
+
+- [ ] 在 `land_edge_finder.lua` 中添加 `PLACED_BUILDINGS` 列表
+- [ ] 添加 `AddPlacedBuilding(tile_x, tile_y, exclusion_radius)` 函数
+- [ ] 修改 `FindNearestValidPosition`，添加 `current_exclusion_radius` 参数
+- [ ] 在 `FindNearestValidPosition` 中实现基于 `DISTANCE_MAP` 和 `PLACED_BUILDINGS` 的距离检查
+- [ ] 在 `layout_handler.lua` 中传入 layout 的排斥半径并记录已放置对象
+- [ ] 在 `prefab_handler.lua` 中传入 prefab 的排斥半径并记录已放置对象
+- [ ] 测试不同排斥半径组合的距离检查
+- [ ] 添加日志记录，显示每个对象对的最小距离要求
+
+### 相关文件
+
+- `mods/move-entity-v2/scripts/land_edge_finder.lua` - 需要修改查找逻辑和添加已放置对象管理
+- `mods/move-entity-v2/scripts/layout_handler.lua` - 需要传入排斥半径并记录已放置对象
+- `mods/move-entity-v2/scripts/prefab_handler.lua` - 需要传入排斥半径并记录已放置对象
+
+---
+

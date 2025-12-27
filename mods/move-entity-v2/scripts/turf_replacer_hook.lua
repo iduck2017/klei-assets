@@ -37,17 +37,11 @@ local function InstallTurfReplacerHook()
         -- 1. GlobalPostPopulate 在每次成功的生成尝试中只被调用一次
         -- 2. ReplaceSingleTile 中已有检查：如果地皮已经是 MOSAIC_RED，会跳过
         if self.parent == nil then
-            local valid_count = LandEdgeFinder.GetValidPositionsCount()
-            if valid_count > 0 then
-                local world = WorldSim
-                if world then
-                    print("[Move Entity V2] [TurfReplacerHook] 检测到世界生成完成，开始替换地皮...")
-                    local valid_positions = LandEdgeFinder.GetValidPositions()
-                    if valid_positions and #valid_positions > 0 then
-                        TurfReplacer.ReplaceValidPositionsWithMosaicRed(world, valid_positions)
-                        print("[Move Entity V2] [TurfReplacerHook] 地皮替换完成")
-                    end
-                end
+            local world = WorldSim
+            if world then
+                print("[Move Entity V2] [TurfReplacerHook] 检测到世界生成完成，开始替换地皮...")
+                TurfReplacer.ReplaceDistanceMapTilesWithMosaicRed(world)
+                print("[Move Entity V2] [TurfReplacerHook] 地皮替换完成")
             end
         end
         

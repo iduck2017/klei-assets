@@ -29,7 +29,7 @@ local function InstallLayoutHook()
     
     local LandEdgeFinder = require("land_edge_finder")
     
-    -- 注意：不再在这里清空 VALID_POSITIONS
+    -- 注意：不再在这里清空 DISTANCE_MAP
     -- 因为 modworldgenmain.lua 不会在重试时重新执行
     -- 改为在 WorldSim:ResetAll() Hook 中清空，并在 Convert 中检查是否为空
     
@@ -76,10 +76,16 @@ local function InstallLayoutHook()
     end
     
     obj_layout.Convert = function(node_id, item, addEntity)
-        -- 检查 VALID_POSITIONS 是否为空，如果为空则重新预计算
+        -- 检查 DISTANCE_MAP 是否为空，如果为空则重新预计算
         -- 不依赖 precomputed 局部变量，因为它在重试时不会重置
-        -- 当 WorldSim:ResetAll() 被调用时，VALID_POSITIONS 会被清空，这里会重新预计算
-        if LandEdgeFinder.GetValidPositionsCount() == 0 then
+        -- 当 WorldSim:ResetAll() 被调用时，DISTANCE_MAP 会被清空，这里会重新预计算
+        local distance_map = LandEdgeFinder.GetDistanceMap()
+        local has_distance_data = false
+        for _ in pairs(distance_map) do
+            has_distance_data = true
+            break
+        end
+        if not has_distance_data then
             local world = WorldSim
             if world then
                 local map_width, map_height = world:GetWorldSize()

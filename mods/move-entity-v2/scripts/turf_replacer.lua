@@ -56,41 +56,53 @@ local function ReplaceSingleTile(world, tile_x, tile_y)
     return true
 end
 
--- 替换有效坐标列表中的所有地皮为红色大理石路
+-- 替换所有有效坐标的地皮为红色大理石路（基于 DISTANCE_MAP，只替换值=0的tile）
 -- world: WorldSim 对象
--- valid_positions: 有效坐标列表（包含 tx, ty 字段）
 -- 返回: 成功替换的数量
-function TurfReplacer.ReplaceValidPositionsWithMosaicRed(world, valid_positions)
+function TurfReplacer.ReplaceDistanceMapTilesWithMosaicRed(world)
     if not world then
         print("[Move Entity V2] [TurfReplacer] ⚠️  无法替换地皮：world 对象为空")
         return 0
     end
     
-    if not valid_positions or #valid_positions == 0 then
-        print("[Move Entity V2] [TurfReplacer] ⚠️  有效坐标列表为空，无需替换")
+    local LandEdgeFinder = require("land_edge_finder")
+    local distance_map = LandEdgeFinder.GetDistanceMap()
+    
+    if not distance_map then
+        print("[Move Entity V2] [TurfReplacer] ⚠️  DISTANCE_MAP 为空，无需替换")
         return 0
     end
     
     local replaced_count = 0
     local skipped_count = 0
+    local total_tiles = 0
     
-    print(string.format(
-        "[Move Entity V2] [TurfReplacer] 开始替换地皮: 共 %d 个有效坐标",
-        #valid_positions
-    ))
-    
-    -- 遍历所有有效坐标并替换地皮
-    for _, pos in ipairs(valid_positions) do
-        if ReplaceSingleTile(world, pos.tx, pos.ty) then
-            replaced_count = replaced_count + 1
-        else
-            skipped_count = skipped_count + 1
+    -- 遍历 DISTANCE_MAP，只替换值=0的tile
+    for map_key, dist_value in pairs(distance_map) do
+        -- 只替换值=0的tile（值=0表示在空洞内或海岸线，需要替换）
+        if dist_value == 0 then
+            total_tiles = total_tiles + 1
+            
+            -- 解析坐标
+            local comma_pos = string.find(map_key, ",")
+            if comma_pos then
+                local tx = tonumber(string.sub(map_key, 1, comma_pos - 1))
+                local ty = tonumber(string.sub(map_key, comma_pos + 1))
+                
+                if tx and ty then
+                    if ReplaceSingleTile(world, tx, ty) then
+                        replaced_count = replaced_count + 1
+                    else
+                        skipped_count = skipped_count + 1
+                    end
+                end
+            end
         end
     end
     
     print(string.format(
-        "[Move Entity V2] [TurfReplacer] 地皮替换完成: 成功替换 %d 个, 跳过 %d 个",
-        replaced_count, skipped_count
+        "[Move Entity V2] [TurfReplacer] 地皮替换完成: 共检查 %d 个 tile (DISTANCE_MAP = 0), 成功替换 %d 个，跳过 %d 个",
+        total_tiles, replaced_count, skipped_count
     ))
     
     return replaced_count
